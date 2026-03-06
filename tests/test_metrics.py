@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from src.utils.metrics import max_drawdown, sharpe_ratio
+from src.utils.metrics import annualized_return, max_drawdown, sharpe_ratio
 
 
 def test_sharpe_ratio_matches_formula():
@@ -36,3 +36,20 @@ def test_max_drawdown_monotone_increase_is_zero():
 def test_max_drawdown_rejects_empty_input():
     with pytest.raises(ValueError, match="at least 1"):
         max_drawdown([])
+
+
+def test_annualized_return_matches_formula():
+    returns = np.array([0.01, -0.01, 0.02], dtype=float)
+    expected = np.prod(1.0 + returns) ** (252.0 / returns.size) - 1.0
+    result = annualized_return(returns)
+    np.testing.assert_allclose(result, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_annualized_return_zero_returns_is_zero():
+    result = annualized_return([0.0, 0.0, 0.0])
+    assert result == 0.0
+
+
+def test_annualized_return_rejects_empty_input():
+    with pytest.raises(ValueError, match="at least 1"):
+        annualized_return([])
