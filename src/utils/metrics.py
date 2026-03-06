@@ -60,3 +60,30 @@ def max_drawdown(cumulative_returns):
     running_max = np.maximum.accumulate(values)
     drawdowns = values / running_max - 1.0
     return float(-np.min(drawdowns))
+
+
+def annualized_return(daily_returns):
+    """
+    Compute geometric annualized return from daily returns.
+
+    Implements:
+        annualized = (prod_t (1 + r_t))^(252 / T) - 1
+
+    Parameters:
+        daily_returns: 1D array-like of daily returns.
+
+    Returns:
+        Annualized return as float.
+
+    Raises:
+        ValueError: If input is not 1D or is empty.
+    """
+    values = np.asarray(daily_returns, dtype=float)
+
+    if values.ndim != 1:
+        raise ValueError("daily_returns must be a 1D array-like input")
+    if values.size == 0:
+        raise ValueError("daily_returns must contain at least 1 observation")
+
+    growth = np.prod(1.0 + values)
+    return float(growth ** (252.0 / values.size) - 1.0)
