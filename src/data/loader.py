@@ -34,3 +34,25 @@ def load_daily_prices(ticker: str, start: str, end: str):
         )
 
     return data.sort_index()
+
+
+def load_multiple(tickers, start: str, end: str):
+    """
+    Load daily OHLCV prices for multiple tickers.
+
+    Parameters:
+        tickers: Iterable of ticker symbols.
+        start: Start date in YYYY-MM-DD format.
+        end: End date in YYYY-MM-DD format.
+
+    Returns:
+        Dictionary mapping each ticker to its price DataFrame.
+
+    Raises:
+        ValueError: If tickers is empty.
+    """
+    tickers = list(tickers)
+    if len(tickers) == 0:
+        raise ValueError("tickers must contain at least one symbol")
+
+    return {ticker: load_daily_prices(ticker, start, end) for ticker in tickers}
