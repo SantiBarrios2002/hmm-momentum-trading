@@ -96,9 +96,13 @@ python experiments/04_regime_detection.py
 python experiments/05_backtest_comparison.py
 ```
 
-## Results Summary (SPY, 2015-2024)
+## Results (SPY, 2015-2024)
 
-### Data characteristics
+### 1. Why not a single Gaussian?
+
+The distribution of daily log-returns shows heavy tails and negative skewness (skew = -0.80, excess kurtosis = 13.42). A single Gaussian (red curve) badly underestimates the probability of extreme moves, motivating a mixture model.
+
+![Return distribution](figures/01_return_distribution.png)
 
 | Metric | Value |
 |--------|-------|
@@ -108,13 +112,21 @@ python experiments/05_backtest_comparison.py
 | Skewness | -0.80 |
 | Excess kurtosis | 13.42 |
 
-Negative skewness and heavy tails justify using an HMM over a single Gaussian.
+### 2. How many states?
 
-### Model selection
+We fit HMMs with K=1 to K=10 and select the model that minimizes AIC / BIC. Both criteria agree on **K=4**, with K=3 as a close runner-up (ΔBIC = 65). We use K=3 throughout the project for interpretability: one bearish, one neutral, and one bullish regime.
 
-Both AIC and BIC select **K=4**, with K=3 as a close runner-up (ΔBIC=65). The project uses K=3 for interpretability (bearish / neutral / bullish).
+![Model selection](figures/02_model_selection.png)
 
-### Learned 3-state model
+### 3. EM convergence
+
+The Baum-Welch algorithm converges in 73 iterations with a log-likelihood improvement of +1003 nats. 9 out of 10 random restarts converge to the same optimum, indicating a well-defined global maximum.
+
+![EM convergence](figures/03_em_convergence.png)
+
+### 4. Learned regimes
+
+The trained model recovers three economically meaningful regimes:
 
 | State | Label | Daily μ | Ann. Return | Ann. Vol | Stationary Prob | Avg Duration |
 |-------|-------|---------|-------------|----------|-----------------|--------------|
@@ -122,9 +134,19 @@ Both AIC and BIC select **K=4**, with K=3 as a close runner-up (ΔBIC=65). The p
 | 1 | Neutral | ~0.00% | ~0% | 19.6% | 40.4% | 23 days |
 | 2 | Bullish | +0.11% | +28% | 8.5% | 56.0% | 38 days |
 
-The bearish state has 7x the volatility of the bullish state, consistent with the leverage effect. The market spends most time in the calm bullish regime.
+The bearish state has 7x the volatility of the bullish state, consistent with the leverage effect. The market spends most time in the calm bullish regime (56%).
 
-### Out-of-sample backtest (2022-2024, 5 bps costs)
+Viterbi decoding assigns each trading day to one regime. The coloring below shows bearish episodes (blue, state 0) concentrated around COVID-19 (2020) and the 2022 drawdown, while long stretches of cyan (state 2, bullish) dominate the uptrend periods:
+
+![Regime-colored prices](figures/04_regime_prices.png)
+
+The forward-backward posteriors show the probability of each state over time. State 0 (bearish) spikes only during sharp sell-offs, state 1 (neutral) activates during choppy sideways markets, and state 2 (bullish) dominates during sustained rallies:
+
+![State posteriors](figures/04_state_posteriors.png)
+
+### 5. Out-of-sample backtest (2022-2024)
+
+The model is trained on 70% of the data (2015-2021) and tested on the remaining 30% (2022-2024). Two signal types are compared against buy-and-hold, with 5 bps transaction costs:
 
 | Strategy | Sharpe | Ann. Return | Max Drawdown | Turnover |
 |----------|--------|-------------|--------------|----------|
@@ -132,7 +154,9 @@ The bearish state has 7x the volatility of the bullish state, consistent with th
 | Sign signal | 0.42 | 5.92% | 28.57% | 0.080 |
 | Buy-and-hold | 0.40 | 5.57% | 27.06% | 0.000 |
 
-The weighted vote signal outperforms buy-and-hold with higher Sharpe ratio (0.54 vs 0.40) and lower maximum drawdown (20.3% vs 27.1%), validating the HMM approach for risk-adjusted performance.
+The **weighted vote** signal outperforms buy-and-hold with a 35% higher Sharpe ratio (0.54 vs 0.40) and 25% lower maximum drawdown (20.3% vs 27.1%). It achieves this by scaling down exposure during high-volatility regimes rather than making binary long/short bets.
+
+![Backtest comparison](figures/05_backtest_comparison.png)
 
 ## References
 

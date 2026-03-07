@@ -10,8 +10,16 @@ venv/
 .venv/
 .env
 *.ipynb_checkpoints/
-figures/*.png
 figures/*.pdf
+
+# Gitignore all PNGs except those referenced in README
+figures/*.png
+!figures/01_return_distribution.png
+!figures/02_model_selection.png
+!figures/03_em_convergence.png
+!figures/04_regime_prices.png
+!figures/04_state_posteriors.png
+!figures/05_backtest_comparison.png
 reports/*.txt
 docs/
 .claude/
