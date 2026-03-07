@@ -70,7 +70,7 @@ def backtest(returns, signals, transaction_cost_bps=5):
     cumulative = np.cumprod(1.0 + net_returns)
 
     if T > 1:
-        turnover = float(np.mean(np.abs(np.diff(lagged_signals))))
+        turnover = float(np.mean(np.abs(np.diff(signals))))
     else:
         turnover = 0.0
 
