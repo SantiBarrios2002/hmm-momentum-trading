@@ -19,8 +19,8 @@ TICKER = "SPY"
 START = "2015-01-01"
 END = "2024-12-31"
 K_VALUES = list(range(1, 11))
-N_RESTARTS = 5
-MAX_ITER = 100
+N_RESTARTS = 1
+MAX_ITER = 40
 TOL = 1e-6
 RANDOM_STATE = 42
 FIGURES_DIR = Path("figures")
@@ -59,7 +59,7 @@ def _save_model_selection_figure(k_values, aic_scores, bic_scores, best_aic_k, b
     plt.close(fig)
 
 
-def _fit_hmm_with_retries(observations, k, *, max_attempts=80):
+def _fit_hmm_with_retries(observations, k, *, max_attempts=3):
     """
     Fit a K-state HMM, retrying with different seeds on numerical failures.
 
@@ -97,9 +97,8 @@ def _fit_hmm_with_retries(observations, k, *, max_attempts=80):
             print(f"retry {attempt + 1}/{max_attempts}", end=" ", flush=True)
 
     if best is None:
-        raise RuntimeError(
-            f"Failed to fit K={k} after {max_attempts} attempts due to numerical instability"
-        ) from last_error
+        print(f"failed after {max_attempts} attempts", end=" ")
+        return None
 
     if successful_restarts < N_RESTARTS:
         print(f"(used {successful_restarts}/{N_RESTARTS} successful restarts)", end=" ")
@@ -132,7 +131,15 @@ def main():
 
     for k in K_VALUES:
         print(f"  Fitting K={k}...", end=" ", flush=True)
-        _, history, _ = _fit_hmm_with_retries(returns, k)
+        fit_result = _fit_hmm_with_retries(returns, k)
+        if fit_result is None:
+            log_likelihoods[k] = np.nan
+            aic_scores[k] = np.nan
+            bic_scores[k] = np.nan
+            print("done (no stable fit)")
+            continue
+
+        _, history, _ = fit_result
         ll = float(history[-1])
         aic = float(compute_aic(ll, k))
         bic = float(compute_bic(ll, k, n_obs=returns.size))
@@ -151,8 +158,14 @@ def main():
             f"{aic_scores[k]:>10.1f}  {bic_scores[k]:>10.1f}"
         )
 
-    best_aic_k = min(aic_scores, key=aic_scores.get)
-    best_bic_k = min(bic_scores, key=bic_scores.get)
+    valid_aic = {k: v for k, v in aic_scores.items() if np.isfinite(v)}
+    valid_bic = {k: v for k, v in bic_scores.items() if np.isfinite(v)}
+    if len(valid_aic) == 0 or len(valid_bic) == 0:
+        print("\nNo stable model fit found for any K.")
+        return 1
+
+    best_aic_k = min(valid_aic, key=valid_aic.get)
+    best_bic_k = min(valid_bic, key=valid_bic.get)
 
     print(f"\nBest K by AIC: {best_aic_k}")
     print(f"Best K by BIC: {best_bic_k}")
