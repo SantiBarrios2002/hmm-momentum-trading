@@ -59,6 +59,7 @@ experiments/
   05_backtest_comparison.py # HMM strategy vs buy-and-hold
   06_em_vs_mcmc.py         # Extension A: EM vs MCMC comparison
   07_multi_asset.py        # Extension B: multi-asset analysis
+  08_k3_vs_k4.py           # Tier 1: quantitative answer to K=3 vs K=4
 
 tests/                     # pytest suite (82 tests)
 docs/                      # paper PDFs, architecture docs, math mappings
@@ -94,6 +95,7 @@ python experiments/02_model_selection.py
 python experiments/03_baum_welch_training.py
 python experiments/04_regime_detection.py
 python experiments/05_backtest_comparison.py
+python experiments/08_k3_vs_k4.py
 ```
 
 ## Results (SPY, 2015-2024)
