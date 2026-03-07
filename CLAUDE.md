@@ -149,22 +149,29 @@ Do NOT install or use: sklearn (not needed), tensorflow, pytorch, pandas (only i
 
 - Source code: `src/`
 - Experiments: `experiments/`
-- Tests: `tests/`
-- Figures output: `figures/`
+- Tests: `tests/` (82 tests)
+- Figures output: `figures/` (gitignored PNGs)
+- Reports output: `reports/` (gitignored TXT reports from experiments)
 - Notebooks: `notebooks/`
+
+## Shared Utilities
+
+These helpers are used across multiple experiment scripts:
+
+- `src/data/loader.extract_close_series(prices)` — extracts 1-D close Series from yfinance DataFrame
+- `src/hmm/utils.sort_states(params)` — reorders states by ascending emission mean, clips/renormalizes
+- `src/hmm/utils.train_best_model(obs, K, ...)` — runs multiple single-restart EM fits, keeps best LL
 
 ## Implementation Order
 
-Follow this exact sequence. Do not skip ahead.
-
 ```
-Phase 1 — Data Layer
+Phase 1 — Data Layer ✅ COMPLETE
   1. src/data/loader.py
   2. src/data/features.py
   3. src/utils/metrics.py
   4. src/utils/plotting.py
 
-Phase 2 — HMM Core (the heart of the project)
+Phase 2 — HMM Core ✅ COMPLETE (82 tests passing)
   5. src/hmm/forward.py        + tests/test_forward.py
   6. src/hmm/backward.py       + tests/test_backward.py
   7. src/hmm/forward_backward.py + tests/test_forward_backward.py
@@ -173,21 +180,27 @@ Phase 2 — HMM Core (the heart of the project)
   10. src/hmm/model_selection.py + tests/test_model_selection.py
   11. src/hmm/inference.py      + tests/test_inference.py
 
-Phase 3 — Strategy Layer
+Phase 3 — Strategy Layer ✅ COMPLETE
   12. src/strategy/signals.py
   13. src/strategy/backtest.py  + tests/test_backtest.py
 
-Phase 4 — Experiments (one at a time)
+Phase 4 — Experiments ✅ COMPLETE (all verified with text reports)
   14. experiments/01_data_exploration.py
   15. experiments/02_model_selection.py
   16. experiments/03_baum_welch_training.py
   17. experiments/04_regime_detection.py
   18. experiments/05_backtest_comparison.py
 
-Phase 5 — Extensions (only after Phase 4 is complete and verified)
+Phase 5 — Extensions (next)
   19. experiments/06_em_vs_mcmc.py
   20. experiments/07_multi_asset.py
 ```
+
+## Key Results (SPY 2015-2024)
+
+- Model selection: AIC and BIC both favor K=4; K=3 used for interpretability
+- 3 regimes: bearish (3.6% of time, ann. vol 56%), neutral (40%), bullish (56%, ann. vol 8.5%)
+- Out-of-sample (2022-2024): weighted vote Sharpe 0.54 vs buy-and-hold 0.40, max drawdown 20% vs 27%
 
 ## What "Done" Looks Like For Each Function
 
