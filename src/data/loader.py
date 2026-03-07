@@ -1,6 +1,26 @@
 """Data loading utilities for market price series."""
 
+import tempfile
+from pathlib import Path
+
 import yfinance as yf
+
+
+_YF_CACHE_CONFIGURED = False
+
+
+def _configure_yfinance_cache():
+    """Route yfinance timezone cache to a writable temp directory."""
+    global _YF_CACHE_CONFIGURED
+    if _YF_CACHE_CONFIGURED:
+        return
+
+    if hasattr(yf, "set_tz_cache_location"):
+        cache_dir = Path(tempfile.gettempdir()) / "yfinance_tz_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        yf.set_tz_cache_location(str(cache_dir))
+
+    _YF_CACHE_CONFIGURED = True
 
 
 def extract_close_series(prices):
@@ -49,6 +69,8 @@ def load_daily_prices(ticker: str, start: str, end: str):
     Raises:
         ValueError: If no rows are returned for the query.
     """
+    _configure_yfinance_cache()
+
     data = yf.download(
         ticker,
         start=start,
