@@ -88,3 +88,24 @@ def test_backtest_rejects_negative_cost():
 
     with pytest.raises(ValueError):
         backtest(returns, signals, transaction_cost_bps=-1)
+
+
+def test_backtest_single_observation():
+    returns = np.array([0.02], dtype=float)
+    signals = np.array([1.0], dtype=float)
+
+    result = backtest(returns, signals, transaction_cost_bps=0)
+
+    np.testing.assert_allclose(result["net_returns"][0], 0.0, atol=1e-12)
+    assert result["metrics"]["turnover"] == 0.0
+
+
+def test_backtest_short_only():
+    returns = np.array([0.01, 0.02, -0.01, 0.03], dtype=float)
+    signals = -np.ones_like(returns)
+
+    result = backtest(returns, signals, transaction_cost_bps=0)
+
+    # lagged = [0, -1, -1, -1], so strategy = [0, -0.02, 0.01, -0.03]
+    expected = np.array([0.0, -0.02, 0.01, -0.03], dtype=float)
+    np.testing.assert_allclose(result["net_returns"], expected, atol=1e-12)
