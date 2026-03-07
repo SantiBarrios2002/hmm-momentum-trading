@@ -12,5 +12,6 @@ venv/
 *.ipynb_checkpoints/
 figures/*.png
 figures/*.pdf
+reports/*.txt
 docs/
 .claude/

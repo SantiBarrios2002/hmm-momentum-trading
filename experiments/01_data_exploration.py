@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import sys
+import time
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,29 +12,14 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.data.features import ewma_volatility, log_returns
-from src.data.loader import load_daily_prices
+from src.data.loader import extract_close_series, load_daily_prices
 
 TICKER = "SPY"
 START = "2015-01-01"
 END = "2024-12-31"
 LAMBDA_PARAM = 0.94
 FIGURES_DIR = Path("figures")
-
-
-def _extract_close_series(prices):
-    """Return a 1D close-price series from a yfinance DataFrame."""
-    if "Close" in prices.columns:
-        close = prices["Close"]
-    elif "Adj Close" in prices.columns:
-        close = prices["Adj Close"]
-    else:
-        raise ValueError("Expected 'Close' or 'Adj Close' column in downloaded prices")
-
-    # yfinance can occasionally return a single-column DataFrame for Close.
-    if hasattr(close, "ndim") and close.ndim != 1:
-        close = close.iloc[:, 0]
-
-    return close.astype(float)
+REPORTS_DIR = Path("reports")
 
 
 def _distribution_stats(values):
@@ -110,18 +96,26 @@ def _save_ewma_figure(returns, ewma_sigma2):
 
 
 def main():
-    print("=== Experiment 01: Data Exploration ===")
-    print(f"Ticker: {TICKER} | Period: {START} to {END}")
+    t_start = time.time()
+    report_lines = []
+
+    def log(msg=""):
+        print(msg)
+        report_lines.append(msg)
+
+    log("=== Experiment 01: Data Exploration ===")
+    log(f"Ticker: {TICKER} | Period: {START} to {END}")
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
     try:
         prices = load_daily_prices(TICKER, START, END)
     except Exception as exc:
-        print(f"Data load failed: {exc}")
+        log(f"Data load failed: {exc}")
         return 1
 
-    close = _extract_close_series(prices)
+    close = extract_close_series(prices)
     returns = log_returns(close)
     ewma_sigma2 = ewma_volatility(returns, lambda_param=LAMBDA_PARAM)
 
@@ -133,27 +127,44 @@ def main():
     annualized_return = float(np.exp(mean * 252.0) - 1.0)
     annualized_vol = float(std * np.sqrt(252.0))
 
-    print(f"Price observations: {len(close)} trading days")
-    print(f"Return observations: {len(returns)} daily log-returns")
-    print(f"Date range: {close.index.min().date()} to {close.index.max().date()}")
+    log(f"Price observations: {len(close)} trading days")
+    log(f"Return observations: {len(returns)} daily log-returns")
+    log(f"Date range: {close.index.min().date()} to {close.index.max().date()}")
 
-    print("\n--- Return Statistics ---")
-    print(f"Mean daily return:      {mean: .6f}")
-    print(f"Std daily return:       {std: .6f}")
-    print(f"Skewness:               {skewness: .4f}")
-    print(f"Excess kurtosis:        {excess_kurtosis: .4f}")
-    print(f"Min:                    {returns.loc[min_idx]: .4f} ({min_idx.date()})")
-    print(f"Max:                    {returns.loc[max_idx]: .4f} ({max_idx.date()})")
+    log("\n--- Return Statistics ---")
+    log(f"Mean daily return:      {mean: .6f}")
+    log(f"Std daily return:       {std: .6f}")
+    log(f"Skewness:               {skewness: .4f}")
+    log(f"Excess kurtosis:        {excess_kurtosis: .4f}")
+    log(f"Min:                    {returns.loc[min_idx]: .4f} ({min_idx.date()})")
+    log(f"Max:                    {returns.loc[max_idx]: .4f} ({max_idx.date()})")
 
-    print("\n--- Annualized ---")
-    print(f"Annualized return:      {annualized_return * 100: .2f}%")
-    print(f"Annualized volatility:  {annualized_vol * 100: .2f}%")
+    log("\n--- Annualized ---")
+    log(f"Annualized return:      {annualized_return * 100: .2f}%")
+    log(f"Annualized volatility:  {annualized_vol * 100: .2f}%")
+
+    log("\n--- EWMA Volatility ---")
+    ewma_ann = np.sqrt(np.asarray(ewma_sigma2, dtype=float)) * np.sqrt(252.0)
+    log(f"Min annualized vol:     {ewma_ann.min() * 100: .2f}%")
+    log(f"Max annualized vol:     {ewma_ann.max() * 100: .2f}%")
+    log(f"Mean annualized vol:    {ewma_ann.mean() * 100: .2f}%")
+
+    log("\n--- Percentiles of daily log-returns ---")
+    for p in [1, 5, 25, 50, 75, 95, 99]:
+        log(f"  {p:>2}th percentile:      {np.percentile(values, p): .6f}")
 
     _save_price_figure(close)
     _save_return_distribution_figure(returns, mean, std)
     _save_ewma_figure(returns, ewma_sigma2)
 
-    print("\nFigures saved to figures/01_*.png")
+    elapsed = time.time() - t_start
+    log(f"\nFigures saved to figures/01_*.png")
+    log(f"Elapsed time: {elapsed:.1f}s")
+
+    report_path = REPORTS_DIR / "01_data_exploration.txt"
+    report_path.write_text("\n".join(report_lines) + "\n")
+    print(f"Report saved to {report_path}")
+
     return 0
 
 

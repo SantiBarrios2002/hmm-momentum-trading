@@ -3,6 +3,36 @@
 import yfinance as yf
 
 
+def extract_close_series(prices):
+    """
+    Return a 1-D float close-price Series from a yfinance DataFrame.
+
+    Handles the column naming variation between yfinance versions (``Close``
+    vs ``Adj Close``) and the occasional single-column DataFrame that
+    ``yfinance`` returns instead of a Series.
+
+    Parameters:
+        prices: pandas DataFrame with OHLCV columns.
+
+    Returns:
+        pandas Series of float close prices with the original DatetimeIndex.
+
+    Raises:
+        ValueError: If neither 'Close' nor 'Adj Close' is found.
+    """
+    if "Close" in prices.columns:
+        close = prices["Close"]
+    elif "Adj Close" in prices.columns:
+        close = prices["Adj Close"]
+    else:
+        raise ValueError("Expected 'Close' or 'Adj Close' column in downloaded prices")
+
+    if hasattr(close, "ndim") and close.ndim != 1:
+        close = close.iloc[:, 0]
+
+    return close.astype(float)
+
+
 def load_daily_prices(ticker: str, start: str, end: str):
     """
     Load daily OHLCV prices for one ticker from Yahoo Finance.

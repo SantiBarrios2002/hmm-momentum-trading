@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import sys
+import time
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,9 +12,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.data.features import log_returns
-from src.data.loader import load_daily_prices
-from src.hmm.baum_welch import baum_welch
+from src.data.loader import extract_close_series, load_daily_prices
 from src.hmm.forward_backward import compute_posteriors
+from src.hmm.utils import sort_states, train_best_model
 from src.hmm.viterbi import viterbi
 from src.utils.plotting import plot_regime_colored_prices
 
@@ -25,100 +26,24 @@ MAX_ITER = 200
 TOL = 1e-6
 N_RESTARTS = 10
 RANDOM_STATE = 42
-EPS = 1e-12
 FIGURES_DIR = Path("figures")
-
-
-def _extract_close_series(prices):
-    if "Close" in prices.columns:
-        close = prices["Close"]
-    elif "Adj Close" in prices.columns:
-        close = prices["Adj Close"]
-    else:
-        raise ValueError("Expected 'Close' or 'Adj Close' in downloaded data")
-
-    if hasattr(close, "ndim") and close.ndim != 1:
-        close = close.iloc[:, 0]
-
-    return close.astype(float)
-
-
-def _sort_states(params):
-    order = np.argsort(params["mu"])
-    sorted_params = {
-        "A": params["A"][np.ix_(order, order)],
-        "pi": params["pi"][order],
-        "mu": params["mu"][order],
-        "sigma2": params["sigma2"][order],
-    }
-
-    # Keep strictly positive probabilities to satisfy inference validation.
-    A = np.clip(sorted_params["A"], EPS, None)
-    sorted_params["A"] = A / A.sum(axis=1, keepdims=True)
-
-    pi = np.clip(sorted_params["pi"], EPS, None)
-    sorted_params["pi"] = pi / pi.sum()
-
-    sorted_params["sigma2"] = np.clip(sorted_params["sigma2"], EPS, None)
-    return sorted_params
-
-
-def _train_best_model(observations, *, successful_restarts, max_attempts=150):
-    best = None
-    best_ll = -np.inf
-    successes = 0
-
-    for attempt in range(max_attempts):
-        if successes >= successful_restarts:
-            break
-
-        seed = RANDOM_STATE + attempt
-        try:
-            params, history, gamma = baum_welch(
-                observations,
-                K=K,
-                max_iter=MAX_ITER,
-                tol=TOL,
-                n_restarts=1,
-                random_state=seed,
-            )
-        except ValueError as exc:
-            if "strictly positive entries" not in str(exc):
-                raise
-            continue
-
-        successes += 1
-        ll = float(history[-1])
-        if ll > best_ll:
-            best_ll = ll
-            best = (params, history, gamma)
-
-    if best is None:
-        raise RuntimeError("Training failed: no successful restart produced valid parameters")
-
-    if successes < successful_restarts:
-        print(
-            f"Warning: used {successes}/{successful_restarts} successful restarts "
-            f"after {max_attempts} attempts"
-        )
-
-    return best
+REPORTS_DIR = Path("reports")
 
 
 def _average_durations(states, k_states):
     durations = [[] for _ in range(k_states)]
-    run_state = int(states[0])
+    current_state = int(states[0])
     run_len = 1
 
-    for current in states[1:]:
-        current = int(current)
-        if current == run_state:
+    for t in range(1, len(states)):
+        s = int(states[t])
+        if s == current_state:
             run_len += 1
         else:
-            durations[run_state].append(run_len)
-            run_state = current
+            durations[current_state].append(run_len)
+            current_state = s
             run_len = 1
-    durations[run_state].append(run_len)
+    durations[current_state].append(run_len)
 
     return [float(np.mean(d)) if len(d) > 0 else 0.0 for d in durations]
 
@@ -152,38 +77,62 @@ def _save_state_posterior_figure(returns, gamma):
 
 
 def main():
-    print("=== Experiment 04: Regime Detection ===")
-    print("Training HMM and running Viterbi decoding...")
+    t_start = time.time()
+    report_lines = []
+
+    def log(msg=""):
+        print(msg)
+        report_lines.append(msg)
+
+    log("=== Experiment 04: Regime Detection ===")
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
     try:
         prices = load_daily_prices(TICKER, START, END)
     except Exception as exc:
-        print(f"Data load failed: {exc}")
+        log(f"Data load failed: {exc}")
         return 1
 
-    close = _extract_close_series(prices)
+    close = extract_close_series(prices)
     returns = log_returns(close)
     returns_values = returns.to_numpy()
+    log(f"Observations: {returns_values.size} daily log-returns")
 
-    params, _, _ = _train_best_model(returns_values, successful_restarts=N_RESTARTS)
-    params = _sort_states(params)
+    t_train = time.time()
+    log("Training HMM...")
+    params, _, _ = train_best_model(
+        returns_values,
+        K,
+        successful_restarts=N_RESTARTS,
+        max_iter=MAX_ITER,
+        tol=TOL,
+        random_state=RANDOM_STATE,
+    )
+    params = sort_states(params)
+    log(f"Training completed in {time.time() - t_train:.1f}s")
 
     A = params["A"]
     pi = params["pi"]
     mu = params["mu"]
     sigma2 = params["sigma2"]
 
+    t_decode = time.time()
+    log("Running Viterbi and forward-backward decoding...")
     states, log_prob = viterbi(returns_values, A, pi, mu, sigma2)
     gamma, _, ll_fb = compute_posteriors(returns_values, A, pi, mu, sigma2)
+    log(f"Decoding completed in {time.time() - t_decode:.1f}s")
 
     counts = np.bincount(states, minlength=K)
     total_days = len(states)
     durations = _average_durations(states, K)
 
-    print("\n--- Regime Statistics (Viterbi) ---")
     labels = ["bearish", "neutral", "bullish"] if K == 3 else [f"state-{i}" for i in range(K)]
+
+    log("\n--- Regime Statistics (Viterbi) ---")
+    log(f"{'State':<22}{'Days':>6}{'Pct':>8}{'MeanRet':>10}{'Vol':>10}{'AvgDur':>10}")
+    log("-" * 66)
     for k in range(K):
         mask = states == k
         if np.any(mask):
@@ -194,24 +143,57 @@ def main():
             vol_k = 0.0
 
         pct = 100.0 * counts[k] / total_days
-        print(
-            f"  State {k} ({labels[k]}): {counts[k]:4d} days ({pct:5.1f}%), "
-            f"mean return = {mean_k * 100: .3f}%, vol = {vol_k * 100: .3f}%"
+        log(
+            f"  {k} ({labels[k]:<10})"
+            f"{counts[k]:>6d}"
+            f"{pct:>7.1f}%"
+            f"{mean_k * 100:>9.3f}%"
+            f"{vol_k * 100:>9.3f}%"
+            f"{durations[k]:>9.2f}d"
         )
 
-    print("\nAverage regime durations:")
+    log("\n--- Annualized per-regime statistics ---")
     for k in range(K):
-        print(f"  State {k}: {durations[k]:.2f} days")
+        mask = states == k
+        if np.any(mask):
+            mean_k = float(np.mean(returns_values[mask]))
+            vol_k = float(np.std(returns_values[mask], ddof=0))
+            ann_ret = mean_k * 252
+            ann_vol = vol_k * np.sqrt(252)
+            log(
+                f"  {k} ({labels[k]}): "
+                f"ann. return = {ann_ret * 100: .2f}%, "
+                f"ann. vol = {ann_vol * 100: .2f}%"
+            )
 
-    print(f"\nViterbi path log-probability: {log_prob:.2f}")
-    print(f"Forward-backward log-likelihood: {ll_fb:.2f}")
+    log(f"\nViterbi path log-probability: {log_prob:.2f}")
+    log(f"Forward-backward log-likelihood: {ll_fb:.2f}")
+
+    log("\n--- Transition matrix (sorted) ---")
+    header = "         " + "  ".join([f"State {j}" for j in range(K)])
+    log(header)
+    for i in range(K):
+        row = "  ".join([f"{A[i, j]:.4f}" for j in range(K)])
+        log(f"State {i}  {row}")
+
+    log("\n--- Regime transitions count ---")
+    n_transitions = np.sum(np.diff(states) != 0)
+    log(f"Total regime transitions: {n_transitions}")
+    log(f"Average days between transitions: {total_days / max(n_transitions, 1):.1f}")
 
     # Align prices with returns index: return_t corresponds to close[t] - close[t-1].
     aligned_prices = close.iloc[1:]
     _save_regime_price_figure(aligned_prices, states)
     _save_state_posterior_figure(returns, gamma)
 
-    print("\nFigures saved to figures/04_*.png")
+    elapsed = time.time() - t_start
+    log(f"\nFigures saved to figures/04_*.png")
+    log(f"Elapsed time: {elapsed:.1f}s")
+
+    report_path = REPORTS_DIR / "04_regime_detection.txt"
+    report_path.write_text("\n".join(report_lines) + "\n")
+    print(f"Report saved to {report_path}")
+
     return 0
 
 
