@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import sys
+import time
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,8 +12,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.data.features import log_returns
-from src.data.loader import load_daily_prices
-from src.hmm.baum_welch import baum_welch
+from src.data.loader import extract_close_series, load_daily_prices
+from src.hmm.utils import sort_states, train_best_model
 
 TICKER = "SPY"
 START = "2015-01-01"
@@ -23,80 +24,7 @@ TOL = 1e-6
 N_RESTARTS = 10
 RANDOM_STATE = 42
 FIGURES_DIR = Path("figures")
-
-
-def _extract_close_series(prices):
-    if "Close" in prices.columns:
-        close = prices["Close"]
-    elif "Adj Close" in prices.columns:
-        close = prices["Adj Close"]
-    else:
-        raise ValueError("Expected 'Close' or 'Adj Close' in downloaded data")
-
-    if hasattr(close, "ndim") and close.ndim != 1:
-        close = close.iloc[:, 0]
-
-    return close.astype(float)
-
-
-def _sort_states(params):
-    order = np.argsort(params["mu"])
-    return {
-        "A": params["A"][np.ix_(order, order)],
-        "pi": params["pi"][order],
-        "mu": params["mu"][order],
-        "sigma2": params["sigma2"][order],
-    }
-
-
-def _train_best_model(observations, *, successful_restarts, max_attempts=150):
-    """Collect successful single-restart fits and keep the best LL."""
-    best_params = None
-    best_history = None
-    best_gamma = None
-    best_ll = -np.inf
-    successes = 0
-
-    for attempt in range(max_attempts):
-        if successes >= successful_restarts:
-            break
-
-        seed = RANDOM_STATE + attempt
-        try:
-            params, history, gamma = baum_welch(
-                observations,
-                K=K,
-                max_iter=MAX_ITER,
-                tol=TOL,
-                n_restarts=1,
-                random_state=seed,
-            )
-        except ValueError as exc:
-            if "strictly positive entries" not in str(exc):
-                raise
-            print(f"  restart attempt {attempt + 1}: numerical retry")
-            continue
-
-        ll = float(history[-1])
-        successes += 1
-        print(f"  successful restart {successes}/{successful_restarts} (LL={ll:.1f})")
-
-        if ll > best_ll:
-            best_ll = ll
-            best_params = params
-            best_history = history
-            best_gamma = gamma
-
-    if best_params is None:
-        raise RuntimeError("Training failed: no successful restart produced valid parameters")
-
-    if successes < successful_restarts:
-        print(
-            f"Warning: used {successes}/{successful_restarts} successful restarts "
-            f"after {max_attempts} attempts"
-        )
-
-    return best_params, best_history, best_gamma
+REPORTS_DIR = Path("reports")
 
 
 def _format_transition_table(A):
@@ -104,7 +32,7 @@ def _format_transition_table(A):
     header = "         " + "  ".join([f"State {j}" for j in range(A.shape[1])])
     lines.append(header)
     for i in range(A.shape[0]):
-        row = "  ".join([f"{A[i, j]:.3f}" for j in range(A.shape[1])])
+        row = "  ".join([f"{A[i, j]:.4f}" for j in range(A.shape[1])])
         lines.append(f"State {i}  {row}")
     return "\n".join(lines)
 
@@ -123,25 +51,45 @@ def _save_convergence_figure(history):
 
 
 def main():
-    print("=== Experiment 03: Baum-Welch Training ===")
-    print(
+    t_start = time.time()
+    report_lines = []
+
+    def log(msg=""):
+        print(msg)
+        report_lines.append(msg)
+
+    log("=== Experiment 03: Baum-Welch Training ===")
+    log(
         f"Training {K}-state HMM on {TICKER} returns "
         f"({N_RESTARTS} successful random restarts target)..."
     )
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
     try:
         prices = load_daily_prices(TICKER, START, END)
     except Exception as exc:
-        print(f"Data load failed: {exc}")
+        log(f"Data load failed: {exc}")
         return 1
 
-    close = _extract_close_series(prices)
+    close = extract_close_series(prices)
     returns = log_returns(close).to_numpy()
+    log(f"Observations: {returns.size} daily log-returns")
 
-    params, history, _ = _train_best_model(returns, successful_restarts=N_RESTARTS)
-    params = _sort_states(params)
+    t_train = time.time()
+    params, history, _ = train_best_model(
+        returns,
+        K,
+        successful_restarts=N_RESTARTS,
+        max_iter=MAX_ITER,
+        tol=TOL,
+        random_state=RANDOM_STATE,
+        verbose=True,
+    )
+    params = sort_states(params)
+    elapsed_train = time.time() - t_train
+    log(f"Training completed in {elapsed_train:.1f}s")
 
     A = params["A"]
     pi = params["pi"]
@@ -155,32 +103,52 @@ def main():
 
     state_labels = ["bearish", "neutral", "bullish"] if K == 3 else [f"state-{i}" for i in range(K)]
 
-    print(f"Converged after {len(history)} EM iterations.")
+    log(f"Converged after {len(history)} EM iterations.")
 
-    print("\n--- Learned Parameters ---")
-    print("Transition matrix A:")
-    print(_format_transition_table(A))
-    print("\nInitial distribution pi:")
-    print(np.array2string(pi, precision=4, suppress_small=False))
+    log("\n--- Learned Parameters ---")
+    log("Transition matrix A:")
+    log(_format_transition_table(A))
+    log("\nInitial distribution pi:")
+    log(np.array2string(pi, precision=4, suppress_small=False))
 
-    print("\nEmission parameters:")
+    log("\nEmission parameters:")
     for i in range(K):
-        print(
+        ann_mu = mu[i] * 252
+        ann_sigma = sigma[i] * np.sqrt(252)
+        log(
             f"  State {i} ({state_labels[i]}): "
-            f"mu = {mu[i]: .6f}, sigma = {sigma[i]: .6f}"
+            f"mu = {mu[i]: .6f} (ann. {ann_mu * 100: .2f}%), "
+            f"sigma = {sigma[i]: .6f} (ann. {ann_sigma * 100: .2f}%)"
         )
 
-    print("\nExpected regime durations (days):")
+    log("\nExpected regime durations (days):")
     for i in range(K):
-        print(f"  State {i}: {durations[i]:.2f} days")
+        log(f"  State {i} ({state_labels[i]}): {durations[i]:.2f} days")
 
-    print(
+    log(
         f"\nLog-likelihood: {ll_final:.1f} "
         f"(initial: {ll_initial:.1f}, improvement: {improvement:.1f})"
     )
 
+    log("\n--- Stationary Distribution ---")
+    # Compute stationary distribution from transition matrix
+    eigenvalues, eigenvectors = np.linalg.eig(A.T)
+    idx = np.argmin(np.abs(eigenvalues - 1.0))
+    stationary = np.real(eigenvectors[:, idx])
+    stationary = stationary / stationary.sum()
+    for i in range(K):
+        log(f"  State {i} ({state_labels[i]}): {stationary[i]:.4f}")
+
     _save_convergence_figure(history)
-    print("Figure saved to figures/03_em_convergence.png")
+
+    elapsed = time.time() - t_start
+    log(f"\nFigure saved to figures/03_em_convergence.png")
+    log(f"Elapsed time: {elapsed:.1f}s")
+
+    report_path = REPORTS_DIR / "03_baum_welch_training.txt"
+    report_path.write_text("\n".join(report_lines) + "\n")
+    print(f"Report saved to {report_path}")
+
     return 0
 
 

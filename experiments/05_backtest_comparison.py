@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import sys
+import time
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,9 +12,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.data.features import log_returns
-from src.data.loader import load_daily_prices
-from src.hmm.baum_welch import baum_welch
+from src.data.loader import extract_close_series, load_daily_prices
 from src.hmm.inference import run_inference
+from src.hmm.utils import sort_states, train_best_model
 from src.strategy.backtest import backtest
 from src.strategy.signals import predictions_to_signal, states_to_signal
 
@@ -26,92 +27,17 @@ TOL = 1e-6
 N_RESTARTS = 10
 RANDOM_STATE = 42
 TRANSACTION_COST_BPS = 5
-EPS = 1e-12
 FIGURES_DIR = Path("figures")
-
-
-def _extract_close_series(prices):
-    if "Close" in prices.columns:
-        close = prices["Close"]
-    elif "Adj Close" in prices.columns:
-        close = prices["Adj Close"]
-    else:
-        raise ValueError("Expected 'Close' or 'Adj Close' in downloaded data")
-
-    if hasattr(close, "ndim") and close.ndim != 1:
-        close = close.iloc[:, 0]
-
-    return close.astype(float)
-
-
-def _sort_states(params):
-    order = np.argsort(params["mu"])
-    sorted_params = {
-        "A": params["A"][np.ix_(order, order)],
-        "pi": params["pi"][order],
-        "mu": params["mu"][order],
-        "sigma2": params["sigma2"][order],
-    }
-
-    A = np.clip(sorted_params["A"], EPS, None)
-    sorted_params["A"] = A / A.sum(axis=1, keepdims=True)
-
-    pi = np.clip(sorted_params["pi"], EPS, None)
-    sorted_params["pi"] = pi / pi.sum()
-
-    sorted_params["sigma2"] = np.clip(sorted_params["sigma2"], EPS, None)
-    return sorted_params
-
-
-def _train_best_model(observations, *, successful_restarts, max_attempts=150):
-    best = None
-    best_ll = -np.inf
-    successes = 0
-
-    for attempt in range(max_attempts):
-        if successes >= successful_restarts:
-            break
-
-        seed = RANDOM_STATE + attempt
-        try:
-            params, history, gamma = baum_welch(
-                observations,
-                K=K,
-                max_iter=MAX_ITER,
-                tol=TOL,
-                n_restarts=1,
-                random_state=seed,
-            )
-        except ValueError as exc:
-            if "strictly positive entries" not in str(exc):
-                raise
-            continue
-
-        successes += 1
-        ll = float(history[-1])
-        if ll > best_ll:
-            best_ll = ll
-            best = (params, history, gamma)
-
-    if best is None:
-        raise RuntimeError("Training failed: no successful restart produced valid parameters")
-
-    if successes < successful_restarts:
-        print(
-            f"Warning: used {successes}/{successful_restarts} successful restarts "
-            f"after {max_attempts} attempts"
-        )
-
-    return best
+REPORTS_DIR = Path("reports")
 
 
 def _print_metric_row(name, metrics):
-    print(
+    return (
         f"{name:<16}"
         f"{metrics['sharpe']:>8.2f}"
         f"{metrics['annualized_return'] * 100:>12.2f}%"
         f"{metrics['max_drawdown'] * 100:>13.2f}%"
-        f"{metrics['turnover']:>11.2f}"
+        f"{metrics['turnover']:>11.4f}"
     )
 
 
@@ -131,47 +57,93 @@ def _save_comparison_figure(test_index, cumulative_sign, cumulative_vote, cumula
     plt.close(fig)
 
 
+def _save_signal_figure(test_index, signals_sign, signals_vote):
+    fig, axes = plt.subplots(2, 1, figsize=(11, 5), sharex=True)
+    axes[0].plot(test_index, signals_sign, linewidth=0.8, alpha=0.8)
+    axes[0].set_ylabel("Sign signal")
+    axes[0].set_ylim(-1.3, 1.3)
+    axes[0].axhline(0, color="gray", linewidth=0.5)
+    axes[0].grid(alpha=0.3)
+
+    axes[1].plot(test_index, signals_vote, linewidth=0.8, alpha=0.8, color="tab:orange")
+    axes[1].set_ylabel("Weighted vote")
+    axes[1].set_ylim(-1.3, 1.3)
+    axes[1].axhline(0, color="gray", linewidth=0.5)
+    axes[1].set_xlabel("Date")
+    axes[1].grid(alpha=0.3)
+
+    axes[0].set_title("Trading Signals Over Test Period")
+    fig.tight_layout()
+    fig.savefig(FIGURES_DIR / "05_signals.png", dpi=150)
+    plt.close(fig)
+
+
 def main():
-    print("=== Experiment 05: Backtest Comparison ===")
+    t_start = time.time()
+    report_lines = []
+
+    def log(msg=""):
+        print(msg)
+        report_lines.append(msg)
+
+    log("=== Experiment 05: Backtest Comparison ===")
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
     try:
         prices = load_daily_prices(TICKER, START, END)
     except Exception as exc:
-        print(f"Data load failed: {exc}")
+        log(f"Data load failed: {exc}")
         return 1
 
-    close = _extract_close_series(prices)
+    close = extract_close_series(prices)
     returns = log_returns(close)
 
     split = int(len(returns) * 0.7)
     train_returns = returns.iloc[:split]
     test_returns = returns.iloc[split:]
 
-    print(
+    log(
         f"Train period: {train_returns.index.min().date()} to "
         f"{train_returns.index.max().date()} ({len(train_returns)} days)"
     )
-    print(
+    log(
         f"Test period:  {test_returns.index.min().date()} to "
         f"{test_returns.index.max().date()} ({len(test_returns)} days)"
     )
 
-    print(f"\nTraining {K}-state HMM on training data...")
-    params, _, _ = _train_best_model(
+    t_train = time.time()
+    log(f"\nTraining {K}-state HMM on training data...")
+    params, history, _ = train_best_model(
         train_returns.to_numpy(),
+        K,
         successful_restarts=N_RESTARTS,
+        max_iter=MAX_ITER,
+        tol=TOL,
+        random_state=RANDOM_STATE,
     )
-    params = _sort_states(params)
+    params = sort_states(params)
+    log(f"Training completed in {time.time() - t_train:.1f}s")
 
     A = params["A"]
     pi = params["pi"]
     mu = params["mu"]
     sigma2 = params["sigma2"]
 
-    print("Running inference on test data...")
+    log("\n--- Learned Parameters (sorted by mu) ---")
+    labels = ["bearish", "neutral", "bullish"] if K == 3 else [f"state-{i}" for i in range(K)]
+    for i in range(K):
+        log(
+            f"  State {i} ({labels[i]}): "
+            f"mu = {mu[i]: .6f} (ann. {mu[i] * 252 * 100: .2f}%), "
+            f"sigma = {np.sqrt(sigma2[i]): .6f} (ann. {np.sqrt(sigma2[i]) * np.sqrt(252) * 100: .2f}%)"
+        )
+
+    t_infer = time.time()
+    log("\nRunning inference on test data...")
     predictions, state_probs = run_inference(test_returns.to_numpy(), A, pi, mu, sigma2)
+    log(f"Inference completed in {time.time() - t_infer:.1f}s")
 
     signals_sign = predictions_to_signal(predictions, transfer_fn="sign")
     signals_vote = states_to_signal(state_probs, mu)
@@ -190,21 +162,37 @@ def main():
     bh_signals = np.ones_like(test_returns.to_numpy())
     result_bh = backtest(test_returns.to_numpy(), bh_signals, transaction_cost_bps=0)
 
-    print(
+    log(
         f"\n--- Out-of-Sample Performance ({TRANSACTION_COST_BPS} bps transaction costs) ---"
     )
-    print("Strategy          Sharpe   Ann.Return   MaxDrawdown   Turnover")
-    _print_metric_row("Sign signal", result_sign["metrics"])
-    _print_metric_row("Weighted vote", result_vote["metrics"])
-    _print_metric_row("Buy-and-hold", result_bh["metrics"])
+    log(f"{'Strategy':<16}{'Sharpe':>8}{'Ann.Return':>12}{'MaxDrawdown':>13}{'Turnover':>11}")
+    log("-" * 60)
+    log(_print_metric_row("Sign signal", result_sign["metrics"]))
+    log(_print_metric_row("Weighted vote", result_vote["metrics"]))
+    log(_print_metric_row("Buy-and-hold", result_bh["metrics"]))
 
     # Check one-period lag convention: first net return should not use a prior signal.
-    print(
-        f"\nFirst-day net return check: "
+    log(
+        f"\nFirst-day net return check (should be ~0 for HMM strategies): "
         f"sign={result_sign['net_returns'][0]:.6f}, "
         f"vote={result_vote['net_returns'][0]:.6f}, "
         f"buy-hold={result_bh['net_returns'][0]:.6f}"
     )
+
+    log("\n--- Signal Statistics ---")
+    for name, sig in [("Sign", signals_sign), ("Vote", signals_vote)]:
+        log(
+            f"  {name}: mean={np.mean(sig):.4f}, "
+            f"std={np.std(sig):.4f}, "
+            f"frac_long={np.mean(sig > 0):.2%}, "
+            f"frac_short={np.mean(sig < 0):.2%}, "
+            f"frac_flat={np.mean(sig == 0):.2%}"
+        )
+
+    log("\n--- Final Cumulative Values ---")
+    log(f"  Sign signal:   {result_sign['cumulative'][-1]:.4f}")
+    log(f"  Weighted vote: {result_vote['cumulative'][-1]:.4f}")
+    log(f"  Buy-and-hold:  {result_bh['cumulative'][-1]:.4f}")
 
     _save_comparison_figure(
         test_returns.index,
@@ -212,7 +200,16 @@ def main():
         result_vote["cumulative"],
         result_bh["cumulative"],
     )
-    print("Figure saved to figures/05_backtest_comparison.png")
+    _save_signal_figure(test_returns.index, signals_sign, signals_vote)
+
+    elapsed = time.time() - t_start
+    log(f"\nFigures saved to figures/05_*.png")
+    log(f"Elapsed time: {elapsed:.1f}s")
+
+    report_path = REPORTS_DIR / "05_backtest_comparison.txt"
+    report_path.write_text("\n".join(report_lines) + "\n")
+    print(f"Report saved to {report_path}")
+
     return 0
 
 
