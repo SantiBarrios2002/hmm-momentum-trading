@@ -13,3 +13,4 @@ venv/
 figures/*.png
 figures/*.pdf
 docs/
+.claude/
