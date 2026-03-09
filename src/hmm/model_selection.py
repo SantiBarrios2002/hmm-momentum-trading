@@ -1,11 +1,16 @@
 """Model selection utilities for Gaussian HMMs."""
 
+from __future__ import annotations
+
+from typing import Any
+
 import numpy as np
+from numpy.typing import NDArray
 
 from src.hmm.baum_welch import baum_welch
 
 
-def _num_parameters(K):
+def _num_parameters(K: int) -> int:
     """Number of free parameters in K-state Gaussian HMM with 1D emissions."""
     # Transition: K rows each with K-1 free params => K*(K-1)
     # Means: K
@@ -14,7 +19,7 @@ def _num_parameters(K):
     return K * (K - 1) + 2 * K + (K - 1)
 
 
-def compute_aic(log_likelihood, K):
+def compute_aic(log_likelihood: float, K: int) -> float:
     """
     Compute Akaike Information Criterion for a K-state HMM.
 
@@ -24,7 +29,7 @@ def compute_aic(log_likelihood, K):
     return float(-2.0 * log_likelihood + 2.0 * p)
 
 
-def compute_bic(log_likelihood, K, n_obs):
+def compute_bic(log_likelihood: float, K: int, n_obs: int) -> float:
     """
     Compute Bayesian Information Criterion for a K-state HMM.
 
@@ -37,14 +42,14 @@ def compute_bic(log_likelihood, K, n_obs):
 
 
 def select_K(
-    observations,
-    K_range=range(1, 11),
-    criterion="bic",
-    max_iter=100,
-    tol=1e-6,
-    n_restarts=5,
-    random_state=None,
-):
+    observations: NDArray[np.floating],
+    K_range: Any = range(1, 11),
+    criterion: str = "bic",
+    max_iter: int = 100,
+    tol: float = 1e-6,
+    n_restarts: int = 5,
+    random_state: int | None = None,
+) -> dict[str, Any]:
     """
     Fit HMMs across K values and select best K by AIC or BIC.
 

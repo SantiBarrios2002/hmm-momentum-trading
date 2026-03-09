@@ -1,13 +1,22 @@
 """Forward-backward posterior computations for Gaussian HMMs."""
 
+from __future__ import annotations
+
 import numpy as np
+from numpy.typing import NDArray
 from scipy.special import logsumexp
 
 from src.hmm.backward import backward
 from src.hmm.forward import forward
 
 
-def compute_posteriors(observations, A, pi, mu, sigma2):
+def compute_posteriors(
+    observations: NDArray[np.floating],
+    A: NDArray[np.floating],
+    pi: NDArray[np.floating],
+    mu: NDArray[np.floating],
+    sigma2: NDArray[np.floating],
+) -> tuple[NDArray[np.floating], NDArray[np.floating], float]:
     """
     Compute state and transition posteriors via forward-backward.
 

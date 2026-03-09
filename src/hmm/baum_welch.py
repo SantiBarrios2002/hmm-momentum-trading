@@ -1,11 +1,19 @@
 """Baum-Welch (EM) training for Gaussian-emission Hidden Markov Models."""
 
+from __future__ import annotations
+
 import numpy as np
+from numpy.typing import NDArray
 
 from src.hmm.forward_backward import compute_posteriors
 
 
-def m_step(observations, gamma, xi, min_variance=1e-8):
+def m_step(
+    observations: NDArray[np.floating],
+    gamma: NDArray[np.floating],
+    xi: NDArray[np.floating],
+    min_variance: float = 1e-8,
+) -> tuple[NDArray[np.floating], NDArray[np.floating], NDArray[np.floating], NDArray[np.floating]]:
     """
     M-step updates for Gaussian HMM parameters (Paper §3.2, Algorithm 1).
 
@@ -57,14 +65,14 @@ def m_step(observations, gamma, xi, min_variance=1e-8):
 
 
 def baum_welch(
-    observations,
-    K,
-    max_iter=100,
-    tol=1e-6,
-    n_restarts=10,
-    random_state=None,
-    min_variance=1e-8,
-):
+    observations: NDArray[np.floating],
+    K: int,
+    max_iter: int = 100,
+    tol: float = 1e-6,
+    n_restarts: int = 10,
+    random_state: int | None = None,
+    min_variance: float = 1e-8,
+) -> tuple[dict[str, NDArray[np.floating]], list[float], NDArray[np.floating]]:
     """
     Baum-Welch EM optimization for Gaussian HMM parameters.
 

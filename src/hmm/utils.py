@@ -1,14 +1,17 @@
 """Shared HMM training utilities for experiment scripts."""
 
+from __future__ import annotations
+
 import numpy as np
+from numpy.typing import NDArray
 
 from src.hmm.baum_welch import baum_welch
 
 
-EPS = 1e-12
+EPS: float = 1e-12
 
 
-def sort_states(params):
+def sort_states(params: dict[str, NDArray[np.floating]]) -> dict[str, NDArray[np.floating]]:
     """
     Sort HMM states in ascending order of emission mean.
 
@@ -41,16 +44,16 @@ def sort_states(params):
 
 
 def train_best_model(
-    observations,
-    K,
+    observations: NDArray[np.floating],
+    K: int,
     *,
-    successful_restarts=10,
-    max_attempts=150,
-    max_iter=200,
-    tol=1e-6,
-    random_state=42,
-    verbose=False,
-):
+    successful_restarts: int = 10,
+    max_attempts: int = 150,
+    max_iter: int = 200,
+    tol: float = 1e-6,
+    random_state: int = 42,
+    verbose: bool = False,
+) -> tuple[dict[str, NDArray[np.floating]], list[float], NDArray[np.floating]]:
     """
     Collect *successful_restarts* single-restart EM fits and keep the best.
 

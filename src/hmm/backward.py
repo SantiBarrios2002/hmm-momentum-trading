@@ -1,10 +1,18 @@
 """Backward algorithm for Gaussian-emission Hidden Markov Models."""
 
+from __future__ import annotations
+
 import numpy as np
+from numpy.typing import NDArray
 from scipy.special import logsumexp
 
 
-def backward(observations, A, mu, sigma2):
+def backward(
+    observations: NDArray[np.floating],
+    A: NDArray[np.floating],
+    mu: NDArray[np.floating],
+    sigma2: NDArray[np.floating],
+) -> NDArray[np.floating]:
     """
     Backward algorithm in log-space (Paper §3.2, Algorithm 1 lines 11-14).
 

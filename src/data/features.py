@@ -1,10 +1,13 @@
 """Feature engineering utilities for price series."""
 
+from __future__ import annotations
+
 import numpy as np
+from numpy.typing import NDArray
 import pandas as pd
 
 
-def log_returns(prices):
+def log_returns(prices: NDArray[np.floating] | pd.Series) -> NDArray[np.floating] | pd.Series:
     """
     Compute log-returns from a price series.
 
@@ -39,7 +42,10 @@ def log_returns(prices):
     return result
 
 
-def ewma_volatility(returns, lambda_param=0.94):
+def ewma_volatility(
+    returns: NDArray[np.floating] | pd.Series,
+    lambda_param: float = 0.94,
+) -> NDArray[np.floating] | pd.Series:
     """
     Compute one-step-ahead EWMA conditional variance from returns.
 
@@ -82,7 +88,10 @@ def ewma_volatility(returns, lambda_param=0.94):
     return sigma2
 
 
-def normalize_returns(returns, window=20):
+def normalize_returns(
+    returns: NDArray[np.floating] | pd.Series,
+    window: int = 20,
+) -> NDArray[np.floating] | pd.Series:
     """
     Standardize returns with rolling mean and rolling standard deviation.
 
