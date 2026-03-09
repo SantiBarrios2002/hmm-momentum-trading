@@ -83,3 +83,99 @@ def states_to_signal(state_probs, mu):
 
     signals = state_probs @ np.sign(mu)
     return np.clip(signals, -1.0, 1.0)
+
+
+def apply_no_trade_zone(signals, state_probs, neutral_idx, threshold):
+    """
+    Zero out trading signals when the neutral-state posterior exceeds a threshold.
+
+    Implements:
+        s'_t = s_t * I(omega_{t, neutral} < threshold)
+
+    where omega_{t, neutral} = p(m_t = neutral | y_{1:t}) is the filtered
+    posterior probability of the neutral state, and I(.) is the indicator
+    function. When the model is highly uncertain (neutral posterior above
+    threshold), the strategy goes flat instead of trading on a weak signal.
+
+    Parameters:
+        signals: np.ndarray, shape (T,)
+            Raw trading signals in [-1, 1] from states_to_signal or
+            predictions_to_signal.
+        state_probs: np.ndarray, shape (T, K)
+            Filtered state probabilities from run_inference().
+        neutral_idx: int
+            Column index of the neutral state in state_probs (typically 1
+            for a 3-state model sorted by ascending mu).
+        threshold: float
+            Neutral posterior probability above which the signal is zeroed.
+            Must be in (0, 1].
+
+    Returns:
+        filtered_signals: np.ndarray, shape (T,)
+            Trading signals with no-trade zone applied. Same as input where
+            the neutral posterior is below threshold, zero otherwise.
+
+    Raises:
+        ValueError: If inputs are empty, shapes are inconsistent, threshold
+            is out of range, or neutral_idx is out of bounds.
+    """
+    signals = np.asarray(signals, dtype=float)
+    state_probs = np.asarray(state_probs, dtype=float)
+
+    if signals.ndim != 1 or signals.size == 0:
+        raise ValueError("signals must be a non-empty 1D array")
+    if state_probs.ndim != 2 or state_probs.size == 0:
+        raise ValueError("state_probs must be a non-empty 2D array")
+    if signals.shape[0] != state_probs.shape[0]:
+        raise ValueError("signals and state_probs must have the same length")
+    if not (0.0 < threshold <= 1.0):
+        raise ValueError("threshold must be in (0, 1]")
+    if not (0 <= neutral_idx < state_probs.shape[1]):
+        raise ValueError("neutral_idx is out of bounds for state_probs")
+
+    neutral_posterior = state_probs[:, neutral_idx]
+    mask = neutral_posterior < threshold
+    return signals * mask
+
+
+def smooth_signal(signals, alpha):
+    """
+    Apply exponential moving average (EMA) smoothing to trading signals.
+
+    Implements the recursion:
+        s'_1     = s_1
+        s'_t     = alpha * s_t + (1 - alpha) * s'_{t-1}     for t >= 2
+
+    where alpha in (0, 1] controls the smoothing strength. Small alpha
+    produces heavy smoothing (slow to react), alpha = 1 returns the
+    original signal (no smoothing).
+
+    The output is clipped to [-1, 1] to maintain valid signal bounds.
+
+    Parameters:
+        signals: np.ndarray, shape (T,)
+            Raw trading signals in [-1, 1].
+        alpha: float
+            Smoothing factor in (0, 1]. alpha=1 means no smoothing,
+            alpha close to 0 means heavy smoothing.
+
+    Returns:
+        smoothed: np.ndarray, shape (T,)
+            EMA-smoothed trading signals, clipped to [-1, 1].
+
+    Raises:
+        ValueError: If signals is empty/non-1D, or alpha is out of range.
+    """
+    signals = np.asarray(signals, dtype=float)
+
+    if signals.ndim != 1 or signals.size == 0:
+        raise ValueError("signals must be a non-empty 1D array")
+    if not (0.0 < alpha <= 1.0):
+        raise ValueError("alpha must be in (0, 1]")
+
+    smoothed = np.empty_like(signals)
+    smoothed[0] = signals[0]
+    for t in range(1, signals.size):
+        smoothed[t] = alpha * signals[t] + (1.0 - alpha) * smoothed[t - 1]
+
+    return np.clip(smoothed, -1.0, 1.0)
