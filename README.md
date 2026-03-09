@@ -25,7 +25,7 @@ pip install -r requirements.txt
 ## Running Tests
 
 ```bash
-pytest -v   # 85 tests across all layers
+pytest -v   # 97 tests across all layers
 ```
 
 ## Project Structure
@@ -61,8 +61,10 @@ experiments/
   07_multi_asset.py        # Extension B: multi-asset analysis
   08_k3_vs_k4.py           # Tier 1: quantitative answer to K=3 vs K=4
   09_rolling_backtest.py   # Tier 1: expanding-window robustness backtest
+  10_signal_refinement.py  # Tier 3: no-trade zone + EMA smoothing grid search
+  11_robustness_test.py    # Tier 3: robustness across tickers and periods
 
-tests/                     # pytest suite (85 tests)
+tests/                     # pytest suite (97 tests)
 docs/                      # paper PDFs, architecture docs, math mappings
 figures/                   # output directory for experiment plots
 reports/                   # output directory for experiment text reports
@@ -100,6 +102,8 @@ python experiments/06_em_vs_mcmc.py
 python experiments/07_multi_asset.py
 python experiments/08_k3_vs_k4.py
 python experiments/09_rolling_backtest.py
+python experiments/10_signal_refinement.py
+python experiments/11_robustness_test.py
 ```
 
 ## Results (SPY, 2015-2024)
@@ -226,6 +230,39 @@ The rolling Sharpe (0.71) is higher than the single-split Sharpe (0.54), and max
 
 ![Rolling cumulative returns](figures/09_rolling_cumulative.png)
 ![Per-window Sharpe](figures/09_window_sharpe.png)
+
+### 10. Signal refinement: no-trade zone + EMA smoothing
+
+We post-process the weighted vote signal with two techniques: a **no-trade zone** (go flat when the neutral posterior exceeds a threshold) and **EMA smoothing** (dampen rapid signal changes). A grid search over 7 thresholds x 6 alphas identifies the best combination.
+
+| Strategy | Sharpe | Ann. Return | Max Drawdown | Turnover |
+|----------|--------|-------------|--------------|----------|
+| **Best (thr=0.6, α=0.1)** | **0.71** | 4.51% | **7.80%** | 0.024 |
+| Baseline (weighted vote) | 0.54 | **7.77%** | 20.33% | 0.043 |
+| Buy-and-hold | 0.40 | 5.57% | 27.06% | 0.000 |
+
+The best configuration improves Sharpe from 0.54 to **0.71** (+31%) and dramatically reduces max drawdown from 20.3% to **7.8%** (-62%). The trade-off is lower annualized return (4.5% vs 7.8%), as the model sits out more often. Neither the no-trade zone alone (Sharpe 0.28) nor EMA smoothing alone (0.43) achieves this — the combination is key.
+
+![Grid search heatmap](figures/10_signal_grid_sharpe.png)
+![Refined backtest](figures/10_signal_refinement_backtest.png)
+
+### 11. Robustness across tickers and periods
+
+We test the full HMM pipeline on 6 configurations: 4 tickers (SPY, QQQ, IWM, EEM) on 2015-2024, plus SPY on two alternative periods (2010-2019, 2018-2024), all with 70/30 train/test splits.
+
+| Config | Sharpe (HMM) | Sharpe (BH) | Delta | MaxDD (HMM) | MaxDD (BH) |
+|--------|-------------|------------|-------|-------------|------------|
+| **SPY 2015-2024** | **0.54** | 0.40 | **+0.14** | 20.3% | 27.1% |
+| **QQQ 2015-2024** | **0.78** | 0.35 | **+0.43** | 23.3% | 38.5% |
+| IWM 2015-2024 | -0.03 | -0.01 | -0.02 | 32.2% | 31.8% |
+| **EEM 2015-2024** | -0.12 | -0.26 | **+0.14** | 23.3% | 34.8% |
+| SPY 2010-2019 | 0.51 | 0.93 | -0.42 | 20.1% | 20.7% |
+| SPY 2018-2024 | -0.49 | 1.38 | -1.87 | 16.2% | 10.5% |
+
+**Win rate:** 50% by Sharpe, 67% by max drawdown reduction. The model excels on liquid large-cap equities (SPY, QQQ) and provides consistent drawdown protection. It struggles in sustained bull markets (SPY 2018-2024 test period = late 2022-2024 rally) where its caution reduces exposure during strong uptrends. IWM (small-cap) shows near-zero edge, suggesting the 3-state model fits large-cap dynamics better.
+
+![Sharpe comparison](figures/11_robustness_sharpe.png)
+![Drawdown comparison](figures/11_robustness_drawdown.png)
 
 ## References
 

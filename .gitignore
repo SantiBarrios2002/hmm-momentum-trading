@@ -27,6 +27,10 @@ figures/*.png
 !figures/08_k3_k4_backtest.png
 !figures/09_rolling_cumulative.png
 !figures/09_window_sharpe.png
+!figures/10_signal_grid_sharpe.png
+!figures/10_signal_refinement_backtest.png
+!figures/11_robustness_sharpe.png
+!figures/11_robustness_drawdown.png
 reports/*.txt
 docs/
 .claude/
