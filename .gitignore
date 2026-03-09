@@ -32,5 +32,6 @@ figures/*.png
 !figures/11_robustness_sharpe.png
 !figures/11_robustness_drawdown.png
 reports/*.txt
-docs/
+docs/*
+!docs/SLIDE_OUTLINE.md
 .claude/
