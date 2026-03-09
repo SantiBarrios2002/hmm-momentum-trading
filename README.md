@@ -25,7 +25,7 @@ pip install -r requirements.txt
 ## Running Tests
 
 ```bash
-pytest -v   # 97 tests across all layers
+pytest -v   # 101 tests across all layers
 ```
 
 ## Project Structure
@@ -64,7 +64,7 @@ experiments/
   10_signal_refinement.py  # Tier 3: no-trade zone + EMA smoothing grid search
   11_robustness_test.py    # Tier 3: robustness across tickers and periods
 
-tests/                     # pytest suite (97 tests)
+tests/                     # pytest suite (101 tests)
 docs/                      # paper PDFs, architecture docs, math mappings
 figures/                   # output directory for experiment plots
 reports/                   # output directory for experiment text reports
