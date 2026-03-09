@@ -1,0 +1,6 @@
+# Normalize line endings to LF on commit, checkout as-is
+* text=auto eol=lf
+
+# Ensure binary files are not treated as text
+*.png binary
+*.pdf binary
