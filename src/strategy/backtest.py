@@ -1,11 +1,20 @@
 """Backtesting utilities for HMM-derived trading strategies."""
 
+from __future__ import annotations
+
+from typing import Any
+
 import numpy as np
+from numpy.typing import NDArray
 
 from src.utils.metrics import annualized_return, max_drawdown, sharpe_ratio
 
 
-def backtest(returns, signals, transaction_cost_bps=5):
+def backtest(
+    returns: NDArray[np.floating],
+    signals: NDArray[np.floating],
+    transaction_cost_bps: float = 5,
+) -> dict[str, Any]:
     """
     Backtest a signal-driven strategy with one-period execution lag (Paper §7).
 

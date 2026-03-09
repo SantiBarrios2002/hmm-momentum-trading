@@ -1,10 +1,19 @@
 """Online inference routines for Gaussian-emission HMMs."""
 
+from __future__ import annotations
+
 import numpy as np
+from numpy.typing import NDArray
 from scipy.special import logsumexp
 
 
-def predict_update_step(omega_prev, A, mu, sigma2, observation):
+def predict_update_step(
+    omega_prev: NDArray[np.floating],
+    A: NDArray[np.floating],
+    mu: NDArray[np.floating],
+    sigma2: NDArray[np.floating],
+    observation: float,
+) -> tuple[NDArray[np.floating], float]:
     """
     Run one online predict-update step (Paper §6, Algorithm 4).
 
@@ -67,7 +76,13 @@ def predict_update_step(omega_prev, A, mu, sigma2, observation):
     return omega_new, prediction
 
 
-def run_inference(observations, A, pi, mu, sigma2):
+def run_inference(
+    observations: NDArray[np.floating],
+    A: NDArray[np.floating],
+    pi: NDArray[np.floating],
+    mu: NDArray[np.floating],
+    sigma2: NDArray[np.floating],
+) -> tuple[NDArray[np.floating], NDArray[np.floating]]:
     """
     Run online inference across all observations.
 

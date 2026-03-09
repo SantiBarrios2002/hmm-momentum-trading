@@ -1,10 +1,20 @@
 """Plotting helpers for regime analysis and strategy evaluation."""
 
+from __future__ import annotations
+
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
+from numpy.typing import NDArray
 
 
-def plot_regime_colored_prices(prices, regimes, ax=None, title="Price by Regime"):
+def plot_regime_colored_prices(
+    prices: NDArray[np.floating],
+    regimes: NDArray[np.integer],
+    ax: Axes | None = None,
+    title: str = "Price by Regime",
+) -> tuple[Figure, Axes]:
     """
     Plot a price series with points colored by inferred regime.
 
@@ -55,11 +65,11 @@ def plot_regime_colored_prices(prices, regimes, ax=None, title="Price by Regime"
 
 
 def plot_cumulative_returns(
-    strategy_cumulative,
-    benchmark_cumulative=None,
-    ax=None,
-    title="Cumulative Returns",
-):
+    strategy_cumulative: NDArray[np.floating],
+    benchmark_cumulative: NDArray[np.floating] | None = None,
+    ax: Axes | None = None,
+    title: str = "Cumulative Returns",
+) -> tuple[Figure, Axes]:
     """
     Plot cumulative return curves for strategy and optional benchmark.
 

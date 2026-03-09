@@ -1,10 +1,19 @@
 """Forward algorithm for Gaussian-emission Hidden Markov Models."""
 
+from __future__ import annotations
+
 import numpy as np
+from numpy.typing import NDArray
 from scipy.special import logsumexp
 
 
-def forward(observations, A, pi, mu, sigma2):
+def forward(
+    observations: NDArray[np.floating],
+    A: NDArray[np.floating],
+    pi: NDArray[np.floating],
+    mu: NDArray[np.floating],
+    sigma2: NDArray[np.floating],
+) -> tuple[NDArray[np.floating], float]:
     """
     Forward algorithm in log-space (Paper §3.2, Algorithm 1 lines 6-9).
 

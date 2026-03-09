@@ -1,9 +1,17 @@
 """Signal generation utilities for HMM-based trading strategies."""
 
+from __future__ import annotations
+
 import numpy as np
+from numpy.typing import NDArray
 
 
-def predictions_to_signal(predictions, transfer_fn="sign", *, scale=None):
+def predictions_to_signal(
+    predictions: NDArray[np.floating],
+    transfer_fn: str = "sign",
+    *,
+    scale: float | None = None,
+) -> NDArray[np.floating]:
     """
     Convert return predictions to trading signals (Paper §7, strategy evaluation).
 
@@ -43,7 +51,10 @@ def predictions_to_signal(predictions, transfer_fn="sign", *, scale=None):
     raise ValueError("transfer_fn must be either 'sign' or 'linear'")
 
 
-def states_to_signal(state_probs, mu):
+def states_to_signal(
+    state_probs: NDArray[np.floating],
+    mu: NDArray[np.floating],
+) -> NDArray[np.floating]:
     """
     Convert state posterior probabilities to trading signals via weighted vote.
 
@@ -85,7 +96,12 @@ def states_to_signal(state_probs, mu):
     return np.clip(signals, -1.0, 1.0)
 
 
-def apply_no_trade_zone(signals, state_probs, neutral_idx, threshold):
+def apply_no_trade_zone(
+    signals: NDArray[np.floating],
+    state_probs: NDArray[np.floating],
+    neutral_idx: int,
+    threshold: float,
+) -> NDArray[np.floating]:
     """
     Zero out trading signals when the neutral-state posterior exceeds a threshold.
 
@@ -138,7 +154,7 @@ def apply_no_trade_zone(signals, state_probs, neutral_idx, threshold):
     return signals * mask
 
 
-def smooth_signal(signals, alpha):
+def smooth_signal(signals: NDArray[np.floating], alpha: float) -> NDArray[np.floating]:
     """
     Apply exponential moving average (EMA) smoothing to trading signals.
 

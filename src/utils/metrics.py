@@ -1,9 +1,12 @@
 """Performance metric utilities for trading strategies."""
 
+from __future__ import annotations
+
 import numpy as np
+from numpy.typing import NDArray
 
 
-def sharpe_ratio(daily_returns):
+def sharpe_ratio(daily_returns: NDArray[np.floating]) -> float:
     """
     Compute annualized Sharpe ratio from daily returns.
 
@@ -33,7 +36,7 @@ def sharpe_ratio(daily_returns):
     return float(np.sqrt(252.0) * values.mean() / std)
 
 
-def max_drawdown(cumulative_returns):
+def max_drawdown(cumulative_returns: NDArray[np.floating]) -> float:
     """
     Compute maximum drawdown from a cumulative return or equity curve.
 
@@ -62,7 +65,7 @@ def max_drawdown(cumulative_returns):
     return float(-np.min(drawdowns))
 
 
-def annualized_return(daily_returns):
+def annualized_return(daily_returns: NDArray[np.floating]) -> float:
     """
     Compute geometric annualized return from daily returns.
 

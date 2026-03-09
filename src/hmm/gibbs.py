@@ -1,12 +1,22 @@
 """Gibbs sampling for Gaussian-emission Hidden Markov Models."""
 
+from __future__ import annotations
+
 import numpy as np
+from numpy.typing import NDArray
 from scipy.special import logsumexp
 
 from src.hmm.forward import forward
 
 
-def sample_states_ffbs(observations, A, pi, mu, sigma2, rng=None):
+def sample_states_ffbs(
+    observations: NDArray[np.floating],
+    A: NDArray[np.floating],
+    pi: NDArray[np.floating],
+    mu: NDArray[np.floating],
+    sigma2: NDArray[np.floating],
+    rng: np.random.Generator | None = None,
+) -> NDArray[np.integer]:
     """
     Sample a full hidden-state trajectory via FFBS (Paper §6 style filtering).
 
@@ -65,7 +75,11 @@ def sample_states_ffbs(observations, A, pi, mu, sigma2, rng=None):
     return states
 
 
-def sample_initial_distribution(states, alpha_prior=1.0, rng=None):
+def sample_initial_distribution(
+    states: NDArray[np.integer],
+    alpha_prior: float | NDArray[np.floating] = 1.0,
+    rng: np.random.Generator | None = None,
+) -> NDArray[np.floating]:
     """
     Sample initial distribution pi from its Dirichlet posterior.
 
@@ -98,7 +112,12 @@ def sample_initial_distribution(states, alpha_prior=1.0, rng=None):
     return rng.dirichlet(alpha + counts)
 
 
-def sample_transition_matrix(states, K, alpha_prior=1.0, rng=None):
+def sample_transition_matrix(
+    states: NDArray[np.integer],
+    K: int,
+    alpha_prior: float | NDArray[np.floating] = 1.0,
+    rng: np.random.Generator | None = None,
+) -> NDArray[np.floating]:
     """
     Sample transition matrix A from row-wise Dirichlet posteriors.
 
@@ -142,13 +161,13 @@ def sample_transition_matrix(states, K, alpha_prior=1.0, rng=None):
 
 
 def sample_emission_means(
-    observations,
-    states,
-    sigma2,
-    mu0=0.0,
-    tau2=1.0,
-    rng=None,
-):
+    observations: NDArray[np.floating],
+    states: NDArray[np.integer],
+    sigma2: NDArray[np.floating],
+    mu0: float = 0.0,
+    tau2: float = 1.0,
+    rng: np.random.Generator | None = None,
+) -> NDArray[np.floating]:
     """
     Sample emission means mu_k from Normal conditional posteriors.
 
@@ -213,14 +232,14 @@ def sample_emission_means(
 
 
 def sample_emission_variances(
-    observations,
-    states,
-    mu,
-    alpha0=2.0,
-    beta0=1e-4,
-    min_variance=1e-8,
-    rng=None,
-):
+    observations: NDArray[np.floating],
+    states: NDArray[np.integer],
+    mu: NDArray[np.floating],
+    alpha0: float = 2.0,
+    beta0: float = 1e-4,
+    min_variance: float = 1e-8,
+    rng: np.random.Generator | None = None,
+) -> NDArray[np.floating]:
     """
     Sample emission variances sigma2_k from Inverse-Gamma conditionals.
 
@@ -292,20 +311,20 @@ def sample_emission_variances(
 
 
 def gibbs_sampler(
-    observations,
-    K,
-    n_samples=200,
-    burn_in=200,
-    thin=2,
-    random_state=None,
-    alpha_pi=1.0,
-    alpha_A=1.0,
-    mu0=0.0,
-    tau2=1.0,
-    sigma2_alpha0=2.0,
-    sigma2_beta0=1e-4,
-    min_variance=1e-8,
-):
+    observations: NDArray[np.floating],
+    K: int,
+    n_samples: int = 200,
+    burn_in: int = 200,
+    thin: int = 2,
+    random_state: int | None = None,
+    alpha_pi: float | NDArray[np.floating] = 1.0,
+    alpha_A: float | NDArray[np.floating] = 1.0,
+    mu0: float = 0.0,
+    tau2: float = 1.0,
+    sigma2_alpha0: float = 2.0,
+    sigma2_beta0: float = 1e-4,
+    min_variance: float = 1e-8,
+) -> dict[str, NDArray[np.floating] | dict[str, NDArray[np.floating]]]:
     """
     Run blocked Gibbs sampling for a Gaussian-emission HMM.
 
@@ -434,7 +453,10 @@ def gibbs_sampler(
     }
 
 
-def _normalize_dirichlet_prior(alpha_prior, shape):
+def _normalize_dirichlet_prior(
+    alpha_prior: float | NDArray[np.floating],
+    shape: tuple[int, ...],
+) -> NDArray[np.floating]:
     """Return positive Dirichlet prior array with given shape."""
     alpha = np.asarray(alpha_prior, dtype=float)
     if alpha.ndim == 0:

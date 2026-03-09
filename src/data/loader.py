@@ -1,8 +1,12 @@
 """Data loading utilities for market price series."""
 
+from __future__ import annotations
+
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 
+import pandas as pd
 import yfinance as yf
 
 
@@ -23,7 +27,7 @@ def _configure_yfinance_cache():
     _YF_CACHE_CONFIGURED = True
 
 
-def extract_close_series(prices):
+def extract_close_series(prices: pd.DataFrame) -> pd.Series:
     """
     Return a 1-D float close-price Series from a yfinance DataFrame.
 
@@ -53,7 +57,7 @@ def extract_close_series(prices):
     return close.astype(float)
 
 
-def load_daily_prices(ticker: str, start: str, end: str):
+def load_daily_prices(ticker: str, start: str, end: str) -> pd.DataFrame:
     """
     Load daily OHLCV prices for one ticker from Yahoo Finance.
 
@@ -88,7 +92,7 @@ def load_daily_prices(ticker: str, start: str, end: str):
     return data.sort_index()
 
 
-def load_multiple(tickers, start: str, end: str):
+def load_multiple(tickers: Iterable[str], start: str, end: str) -> dict[str, pd.DataFrame]:
     """
     Load daily OHLCV prices for multiple tickers.
 
