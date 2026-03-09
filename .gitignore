@@ -20,6 +20,13 @@ figures/*.png
 !figures/04_regime_prices.png
 !figures/04_state_posteriors.png
 !figures/05_backtest_comparison.png
+!figures/06_backtest_em_vs_mcmc.png
+!figures/06_mcmc_mu_posterior.png
+!figures/07_asset_sharpe_comparison.png
+!figures/07_bearish_posterior_corr.png
+!figures/08_k3_k4_backtest.png
+!figures/09_rolling_cumulative.png
+!figures/09_window_sharpe.png
 reports/*.txt
 docs/
 .claude/
