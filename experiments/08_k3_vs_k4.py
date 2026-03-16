@@ -118,11 +118,11 @@ def _save_backtest_figure(test_index, k3_vote_cumulative, k4_vote_cumulative, bh
 def _log_params(log, k, params):
     log(f"\n--- K={k} parameters (sorted by mu) ---")
     for i in range(k):
-        ann_mu = params["mu"][i] * 252.0
+        drift_mu = params["mu"][i] * 252.0
         ann_sigma = np.sqrt(params["sigma2"][i]) * np.sqrt(252.0)
         log(
             f"  state {i}: "
-            f"mu={params['mu'][i]: .6f} (ann. {ann_mu * 100: .2f}%), "
+            f"mu={params['mu'][i]: .6f} (drift mu*252 = {drift_mu * 100: .2f}%), "
             f"sigma={np.sqrt(params['sigma2'][i]): .6f} (ann. {ann_sigma * 100: .2f}%)"
         )
 

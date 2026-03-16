@@ -136,7 +136,7 @@ def main():
     for i in range(K):
         log(
             f"  State {i} ({labels[i]}): "
-            f"mu = {mu[i]: .6f} (ann. {mu[i] * 252 * 100: .2f}%), "
+            f"mu = {mu[i]: .6f} (drift mu*252 = {mu[i] * 252 * 100: .2f}%), "
             f"sigma = {np.sqrt(sigma2[i]): .6f} (ann. {np.sqrt(sigma2[i]) * np.sqrt(252) * 100: .2f}%)"
         )
 

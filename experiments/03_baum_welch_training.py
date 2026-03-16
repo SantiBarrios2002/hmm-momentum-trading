@@ -113,11 +113,11 @@ def main():
 
     log("\nEmission parameters:")
     for i in range(K):
-        ann_mu = mu[i] * 252
+        drift_mu = mu[i] * 252
         ann_sigma = sigma[i] * np.sqrt(252)
         log(
             f"  State {i} ({state_labels[i]}): "
-            f"mu = {mu[i]: .6f} (ann. {ann_mu * 100: .2f}%), "
+            f"mu = {mu[i]: .6f} (drift mu*252 = {drift_mu * 100: .2f}%), "
             f"sigma = {sigma[i]: .6f} (ann. {ann_sigma * 100: .2f}%)"
         )
 

@@ -138,11 +138,13 @@ The Baum-Welch algorithm converges in 73 iterations with a log-likelihood improv
 
 The trained model recovers three economically meaningful regimes:
 
-| State | Label | Daily μ | Ann. Return | Ann. Vol | Stationary Prob | Avg Duration |
-|-------|-------|---------|-------------|----------|-----------------|--------------|
-| 0 | Bearish | -0.058% | -145% | 56.5% | 3.6% | 9 days |
+| State | Label | Daily μ | Ann. Return* | Ann. Vol | Stationary Prob | Avg Duration |
+|-------|-------|---------|--------------|----------|-----------------|--------------|
+| 0 | Bearish | -0.058% | -77% | 56.5% | 3.6% | 9 days |
 | 1 | Neutral | ~0.00% | ~0% | 19.6% | 40.4% | 23 days |
-| 2 | Bullish | +0.11% | +28% | 8.5% | 56.0% | 38 days |
+| 2 | Bullish | +0.11% | +32% | 8.5% | 56.0% | 38 days |
+
+*Annualized return uses geometric compounding: (1 + μ)^252 − 1. The bearish regime lasts ~9 days on average; the annualized figure is a hypothetical extrapolation.*
 
 The bearish state has 7x the volatility of the bullish state, consistent with the leverage effect. The market spends most time in the calm bullish regime (56%).
 
