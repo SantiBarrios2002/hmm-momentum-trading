@@ -66,6 +66,17 @@ class TestDiscretizeLangevin:
         ])
         np.testing.assert_allclose(F, F_expected, atol=1e-12)
 
+    def test_positive_theta_raises(self):
+        """theta > 0 (explosive dynamics) must raise ValueError."""
+        with pytest.raises(ValueError, match="theta must be <= 0"):
+            discretize_langevin(theta=0.5, sigma=0.1, dt=1.0)
+
+    def test_theta_zero_works(self):
+        """theta=0 (pure random walk) is valid and gives F = [[1, dt], [0, 1]]."""
+        F, Q = discretize_langevin(theta=0.0, sigma=0.1, dt=1.0)
+        np.testing.assert_allclose(F, np.array([[1.0, 1.0], [0.0, 1.0]]), atol=1e-12)
+        assert Q[1, 1] > 0  # non-degenerate noise
+
     def test_Q_scales_with_sigma_squared(self):
         """Doubling sigma should quadruple Q (Q is proportional to sigma^2)."""
         _, Q1 = discretize_langevin(theta=-0.5, sigma=0.1, dt=1.0)
@@ -84,9 +95,11 @@ class TestDiscretizeLangevin:
         bbT_dt = np.array([[0.0, 0.0], [0.0, sigma**2]]) * dt
         # Off-diagonal terms are O(dt^2), use relative tolerance for [1,1]
         np.testing.assert_allclose(Q[1, 1], bbT_dt[1, 1], rtol=1e-4)
-        # Off-diagonal and [0,0] are higher-order corrections, just check small
-        assert abs(Q[0, 0]) < 1e-15
-        assert abs(Q[0, 1]) < 1e-10
+        # Q[0,0] ≈ sigma^2 * dt^3 / 3 (higher-order), Q[0,1] ≈ sigma^2 * dt^2 / 2
+        expected_Q00 = sigma**2 * dt**3 / 3.0
+        assert abs(Q[0, 0]) < 10 * expected_Q00
+        expected_Q01 = sigma**2 * dt**2 / 2.0
+        assert abs(Q[0, 1]) < 10 * expected_Q01
 
 
 # ---------- observation_matrix tests ----------
@@ -174,3 +187,63 @@ class TestTransitionDensityWithJump:
         np.testing.assert_allclose(cov, cov.T, atol=1e-14)
         eigenvalues = np.linalg.eigvalsh(cov)
         assert np.all(eigenvalues >= -1e-12)
+
+    def test_zero_jump_size_matches_no_jump(self):
+        """sigma_J=0 and mu_J=0 must give same result as jump_occurred=False (semigroup identity)."""
+        theta, sigma, dt = -0.5, 0.1, 1.0
+        x_prev = np.array([100.0, 0.05])
+
+        mean_no, cov_no = transition_density_with_jump(
+            x_prev, theta, sigma, dt, jump_occurred=False
+        )
+        for tau in [0.0, 0.3, 0.5, 1.0]:
+            mean_j, cov_j = transition_density_with_jump(
+                x_prev, theta, sigma, dt,
+                jump_occurred=True, tau=tau, mu_J=0.0, sigma_J=0.0,
+            )
+            np.testing.assert_allclose(mean_j, mean_no, atol=1e-10)
+            np.testing.assert_allclose(cov_j, cov_no, atol=1e-10)
+
+    def test_jump_at_tau_zero(self):
+        """tau=0: pre-jump diffusion is identity; result = full diffusion after jump."""
+        theta, sigma, dt, mu_J, sigma_J = -0.5, 0.1, 1.0, 0.3, 0.2
+        x_prev = np.array([10.0, 0.1])
+
+        mean, cov = transition_density_with_jump(
+            x_prev, theta, sigma, dt,
+            jump_occurred=True, tau=0.0, mu_J=mu_J, sigma_J=sigma_J,
+        )
+        F_full, Q_full = discretize_langevin(theta, sigma, dt)
+        expected_mean = F_full @ x_prev + F_full @ np.array([0.0, mu_J])
+        expected_cov = (
+            F_full @ np.array([[0.0, 0.0], [0.0, sigma_J**2]]) @ F_full.T + Q_full
+        )
+        np.testing.assert_allclose(mean, expected_mean, atol=1e-10)
+        np.testing.assert_allclose(cov, expected_cov, atol=1e-10)
+
+    def test_jump_at_tau_dt(self):
+        """tau=dt: post-jump diffusion is identity; jump cov added directly."""
+        theta, sigma, dt, sigma_J = -0.5, 0.1, 1.0, 0.5
+        x_prev = np.array([10.0, 0.0])
+
+        mean, cov = transition_density_with_jump(
+            x_prev, theta, sigma, dt,
+            jump_occurred=True, tau=dt, mu_J=0.0, sigma_J=sigma_J,
+        )
+        F_full, Q_full = discretize_langevin(theta, sigma, dt)
+        expected_cov = Q_full + np.array([[0.0, 0.0], [0.0, sigma_J**2]])
+        np.testing.assert_allclose(cov, expected_cov, atol=1e-10)
+
+    def test_tau_out_of_bounds_raises(self):
+        """tau outside [0, dt] must raise ValueError."""
+        x_prev = np.array([10.0, 0.0])
+        with pytest.raises(ValueError, match="tau must be in"):
+            transition_density_with_jump(
+                x_prev, -0.5, 0.1, 1.0,
+                jump_occurred=True, tau=-0.1,
+            )
+        with pytest.raises(ValueError, match="tau must be in"):
+            transition_density_with_jump(
+                x_prev, -0.5, 0.1, 1.0,
+                jump_occurred=True, tau=1.5,
+            )

@@ -52,6 +52,11 @@ def discretize_langevin(
     Q : np.ndarray, shape (2, 2)
         Discrete-time process noise covariance (symmetric, PSD).
     """
+    if theta > 0:
+        raise ValueError(
+            f"theta must be <= 0 for stable dynamics, got theta={theta}"
+        )
+
     A = np.array([[0.0, 1.0], [0.0, theta]])
     b = np.array([[0.0], [sigma]])
     bbT = b @ b.T  # shape (2, 2), = [[0, 0], [0, sigma^2]]
@@ -164,6 +169,9 @@ def transition_density_with_jump(
         return mean, Q
 
     # Jump at time tau within [0, dt]
+    if not (0.0 <= tau <= dt):
+        raise ValueError(f"tau must be in [0, dt={dt}], got tau={tau}")
+
     # Pre-jump diffusion: t to t+tau
     F1, Q1 = discretize_langevin(theta, sigma, tau)
     # Post-jump diffusion: t+tau to t+dt

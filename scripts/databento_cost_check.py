@@ -6,7 +6,12 @@ Usage:
 """
 
 import os
-import databento as db
+
+try:
+    import databento as db
+except ImportError:
+    print("Error: 'databento' package not installed. Run: pip install databento")
+    raise SystemExit(1)
 
 
 def main():
