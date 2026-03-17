@@ -55,7 +55,7 @@ def kalman_update(
         S   = G @ C_pred @ G' + sigma_obs^2       innovation covariance  (Eq 31)
         K   = C_pred @ G' / S                      Kalman gain            (Eq 32)
         mu  = mu_pred + K * (y - G @ mu_pred)      filtered mean          (Eq 33)
-        C   = (I - K @ G) @ C_pred                 filtered covariance    (Eq 33)
+        C   = (I-KG) C_pred (I-KG)' + K σ²_obs K'   Joseph form            (Eq 33)
 
     The prediction error decomposition (PED) log-likelihood is:
 
@@ -100,8 +100,12 @@ def kalman_update(
 
     # Filtered state
     mu_new = mu_pred + K * innovation
-    C_new = (np.eye(2) - np.outer(K, G.ravel())) @ C_pred
-    C_new = (C_new + C_new.T) / 2.0  # enforce symmetry
+
+    # Joseph form for numerical stability (PSD-preserving by construction):
+    #   C_new = (I - K G) C_pred (I - K G)' + K sigma_obs^2 K'
+    I_KG = np.eye(2) - np.outer(K, G.ravel())
+    C_new = I_KG @ C_pred @ I_KG.T + sigma_obs_sq * np.outer(K, K)
+    C_new = (C_new + C_new.T) / 2.0  # enforce exact symmetry
 
     # PED log-likelihood: log N(y; y_pred, S)
     log_likelihood = -0.5 * np.log(2.0 * np.pi * S) - 0.5 * innovation**2 / S
@@ -120,7 +124,8 @@ def kalman_filter(
 ) -> tuple[NDArray, NDArray, NDArray, NDArray, NDArray, float]:
     """Run a full Kalman filter over a sequence of observations (2012 Paper §III-A).
 
-    For each timestep t = 0, ..., T-1:
+    For t = 0: use mu0, C0 directly as the predicted state (prior on x_0).
+    For t = 1, ..., T-1:
         1. Predict:  mu_pred, C_pred = kalman_predict(mu_{t-1}, C_{t-1}, F, Q)
         2. Update:   mu_t, C_t, ll_t = kalman_update(mu_pred, C_pred, G, sigma_obs^2, y_t)
 
@@ -144,9 +149,9 @@ def kalman_filter(
     sigma_obs_sq : float
         Observation noise variance.
     mu0 : np.ndarray, shape (2,)
-        Prior state mean.
+        Prior state mean at the time of the first observation.
     C0 : np.ndarray, shape (2, 2)
-        Prior state covariance.
+        Prior state covariance at the time of the first observation.
 
     Returns
     -------
@@ -174,8 +179,11 @@ def kalman_filter(
     C = C0.copy()
 
     for t in range(T):
-        # Predict
-        mu_pred, C_pred = kalman_predict(mu, C, F, Q)
+        # Predict: at t=0 use prior directly; at t>0 propagate through F
+        if t == 0:
+            mu_pred, C_pred = mu.copy(), C.copy()
+        else:
+            mu_pred, C_pred = kalman_predict(mu, C, F, Q)
         predicted_means[t] = mu_pred
         predicted_covs[t] = C_pred
 
