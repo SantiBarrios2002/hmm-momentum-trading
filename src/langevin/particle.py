@@ -175,6 +175,13 @@ def propagate_particles(
     new_states : np.ndarray, shape (N, 2)
         Propagated particle states.
     """
+    if dt <= 0:
+        raise ValueError(f"dt must be > 0, got {dt}")
+    if sigma < 0:
+        raise ValueError(f"sigma must be >= 0, got {sigma}")
+    if np.any(jump_times[jump_occurred] < 0) or np.any(jump_times[jump_occurred] > dt):
+        raise ValueError("jump_times must be in [0, dt] for all jumping particles")
+
     if rng is None:
         rng = np.random.default_rng()
 
@@ -195,20 +202,26 @@ def propagate_particles(
     for i in jump_indices:
         tau = jump_times[i]
 
-        # Pre-jump diffusion: 0 to tau
-        F1, Q1 = discretize_langevin(theta, sigma, tau)
-        w1 = rng.multivariate_normal(np.zeros(2), Q1)
-        x_mid = F1 @ states[i] + w1
+        # Pre-jump diffusion: 0 to tau (skip if tau=0, identity diffusion)
+        if tau > 0:
+            F1, Q1 = discretize_langevin(theta, sigma, tau)
+            w1 = rng.multivariate_normal(np.zeros(2), Q1)
+            x_mid = F1 @ states[i] + w1
+        else:
+            x_mid = states[i].copy()
 
         # Jump perturbation in trend component
         J = rng.normal(mu_J, sigma_J) if sigma_J > 0 else mu_J
         x_mid[1] += J
 
-        # Post-jump diffusion: tau to dt
+        # Post-jump diffusion: tau to dt (skip if tau=dt, identity diffusion)
         dt2 = dt - tau
-        F2, Q2 = discretize_langevin(theta, sigma, dt2)
-        w2 = rng.multivariate_normal(np.zeros(2), Q2)
-        new_states[i] = F2 @ x_mid + w2
+        if dt2 > 0:
+            F2, Q2 = discretize_langevin(theta, sigma, dt2)
+            w2 = rng.multivariate_normal(np.zeros(2), Q2)
+            new_states[i] = F2 @ x_mid + w2
+        else:
+            new_states[i] = x_mid
 
     return new_states
 
@@ -434,14 +447,12 @@ def run_particle_filter(
             states, log_weights, observations[t], G, sigma_obs_sq,
         )
 
-        # Per-step marginal likelihood: log( (1/N) * sum_i exp(log_lik_i) )
-        # = logsumexp(log_weights) - logsumexp(log_weights_before)
-        # Since we resample to uniform each step, log_weights_before = -log(N)
-        # So: log p(y_t) = logsumexp(log_weights) - (-log(N)) ... but this
-        # is the unnormalized version. More precisely:
-        # log p_hat(y_t) = logsumexp(log_lik_i) - log(N)
-        # where log_lik_i is the observation log-likelihood for particle i.
-        # Since log_weights = -log(N) + log_lik_i after weighting:
+        # Per-step marginal likelihood estimate (bootstrap PF, Eq 42):
+        #   log p_hat(y_t) = log( (1/N) * sum_i p(y_t | x_i) )
+        #                  = logsumexp(log_lik_i) - log(N)
+        # After resampling, log_weights = -log(N) (uniform), so after
+        # weight_particles: log_weights = -log(N) + log_lik_i, and
+        # logsumexp(log_weights) = logsumexp(log_lik_i) - log(N) = correct.
         log_likelihoods[t] = logsumexp(log_weights)
 
         # 4. Compute weighted estimates
