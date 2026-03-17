@@ -64,16 +64,16 @@ class TestKalmanPredict:
 class TestKalmanUpdate:
     """Tests for the Kalman update (measurement) step."""
 
-    def test_zero_observation_noise(self):
-        """With sigma_obs=0, posterior collapses to the observation (for price)."""
+    def test_zero_observation_noise_exact(self):
+        """With sigma_obs_sq=0.0 exactly, posterior collapses to the observation."""
         mu_pred = np.array([10.0, 0.5])
         C_pred = np.eye(2)
         G = observation_matrix()
         observation = 12.0
 
-        mu_new, C_new, _ = kalman_update(mu_pred, C_pred, G, 1e-15, observation)
+        mu_new, C_new, _ = kalman_update(mu_pred, C_pred, G, 0.0, observation)
         # Price component should snap to observation
-        np.testing.assert_allclose(mu_new[0], observation, atol=1e-6)
+        np.testing.assert_allclose(mu_new[0], observation, atol=1e-10)
         # Price variance should collapse to ~0
         assert C_new[0, 0] < 1e-10
 
@@ -191,7 +191,7 @@ class TestKalmanFilter:
         assert filt_m.shape == (T, 2)
         assert filt_c.shape == (T, 2, 2)
         assert lls.shape == (T,)
-        assert isinstance(total_ll, float)
+        assert np.isscalar(total_ll)
 
     def test_total_ll_equals_sum(self, synthetic_langevin_data):
         """Total log-likelihood equals sum of per-step PED terms."""
@@ -243,15 +243,65 @@ class TestKalmanFilter:
             assert np.all(eigenvalues >= -1e-12), f"Non-PSD at t={t}"
 
     def test_single_observation(self):
-        """Filter handles T=1 correctly."""
+        """Filter handles T=1 correctly; predicted state at t=0 equals prior."""
         F, Q = discretize_langevin(-0.5, 0.1, 1.0)
         G = observation_matrix()
         mu0 = np.array([10.0, 0.0])
         C0 = np.eye(2) * 5.0
 
-        pred_m, _, filt_m, _, lls, total_ll = kalman_filter(
+        pred_m, pred_c, filt_m, _, lls, total_ll = kalman_filter(
             np.array([10.5]), F, Q, G, 0.5, mu0, C0,
         )
         assert pred_m.shape == (1, 2)
         assert filt_m.shape == (1, 2)
         np.testing.assert_allclose(total_ll, lls[0])
+        # At t=0, predicted state must equal the prior (no spurious predict step)
+        np.testing.assert_allclose(pred_m[0], mu0)
+        np.testing.assert_allclose(pred_c[0], C0)
+
+    def test_prior_used_directly_at_t0(self):
+        """Verify t=0 uses prior directly, not F @ mu0 (catches off-by-one bug)."""
+        F, Q = discretize_langevin(-0.5, 0.1, 1.0)
+        G = observation_matrix()
+        mu0 = np.array([100.0, 0.5])
+        C0 = np.eye(2) * 2.0
+
+        # Use an observation far from the prior so filtered[0] != mu0
+        pred_m, _, filt_m, _, _, _ = kalman_filter(
+            np.array([120.0, 121.0, 122.0]), F, Q, G, 0.5, mu0, C0,
+        )
+        # t=0: prediction = prior
+        np.testing.assert_allclose(pred_m[0], mu0)
+        # After updating with y=120 (far from mu0[0]=100), filtered[0] != mu0
+        assert not np.allclose(filt_m[0], mu0)
+        # t=1 prediction should be F @ filtered[0], not F @ mu0
+        np.testing.assert_allclose(pred_m[1], F @ filt_m[0], atol=1e-12)
+
+    def test_manual_recursion_matches(self):
+        """kalman_filter output matches manual predict-update loop (reference test)."""
+        F, Q = discretize_langevin(-0.3, 0.08, 1.0)
+        G = observation_matrix()
+        sigma_obs_sq = 0.5
+        mu0 = np.array([50.0, 0.1])
+        C0 = np.eye(2) * 3.0
+        obs = np.array([50.5, 51.0, 50.8, 51.2, 50.9])
+
+        # Run kalman_filter
+        pred_m, pred_c, filt_m, filt_c, lls, total_ll = kalman_filter(
+            obs, F, Q, G, sigma_obs_sq, mu0, C0,
+        )
+
+        # Manual loop
+        mu, C = mu0.copy(), C0.copy()
+        for t in range(len(obs)):
+            if t == 0:
+                mp, cp = mu.copy(), C.copy()
+            else:
+                mp, cp = kalman_predict(mu, C, F, Q)
+            np.testing.assert_allclose(pred_m[t], mp, atol=1e-12)
+            np.testing.assert_allclose(pred_c[t], cp, atol=1e-12)
+
+            mu, C, ll = kalman_update(mp, cp, G, sigma_obs_sq, obs[t])
+            np.testing.assert_allclose(filt_m[t], mu, atol=1e-12)
+            np.testing.assert_allclose(filt_c[t], C, atol=1e-12)
+            np.testing.assert_allclose(lls[t], ll, atol=1e-12)
