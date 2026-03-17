@@ -131,6 +131,46 @@ Do not vectorize loops for clarity's sake in the first implementation. A clear d
 
 If an implementation choice is ambiguous (e.g., "how to initialize the transition matrix?", "tied vs untied variances?"), do NOT make a silent default. State the options, explain the trade-offs, and let me decide. The student must be able to justify every choice during the presentation.
 
+### 11. VALIDATE INPUTS AT FUNCTION BOUNDARIES
+
+Every public function in `src/` must guard against invalid inputs that would silently produce wrong results. Examples:
+- `theta > 0` in a mean-reversion parameter → `raise ValueError`
+- `tau` outside `[0, dt]` for a jump time → `raise ValueError`
+- Negative variances, non-square matrices, dimension mismatches
+
+Silent garbage-in-garbage-out is worse than a crash. Each guard must have a matching test (`pytest.raises`).
+
+### 12. TEST BOUNDARY AND EDGE CASES, NOT JUST THE HAPPY PATH
+
+Every test file must include tests at the boundaries of the parameter space, not only interior/typical values:
+- Zero and extreme values (e.g., `sigma_obs = 0.0` exactly, not `1e-15` as a proxy)
+- Boundary conditions (e.g., `tau = 0`, `tau = dt`, `T = 1`)
+- Degenerate cases where algebra simplifies (e.g., `F = I`, `Q = 0`)
+- Semigroup/identity checks: a no-op parameter (like `sigma_J = 0, mu_J = 0`) must match the no-jump path exactly
+
+### 13. USE NUMERICALLY STABLE FORMULATIONS
+
+When a numerically stable variant of a formula exists, use it from the start — do not write the naive version first:
+- **Kalman covariance update**: use Joseph form `(I-KG) C (I-KG)' + K σ² K'`, not the standard form `(I-KG) C` which breaks PSD
+- **Log-space**: already covered by Rule 6
+- **Symmetry enforcement**: always symmetrize covariance matrices after computation: `C = (C + C.T) / 2`
+
+The RBPF runs many Kalman filters in parallel — a single numerically unstable update can corrupt all downstream particles.
+
+### 14. DERIVE TEST TOLERANCES FROM PARAMETERS
+
+Never hard-code magic tolerance numbers like `atol=1e-15` without justification. Instead, derive tolerances from the test parameters:
+```python
+# BAD: magic number, will break if sigma or dt changes
+np.testing.assert_allclose(Q, np.zeros((2, 2)), atol=1e-15)
+
+# GOOD: tolerance derived from expected magnitude
+# Q[1,1] ≈ sigma^2 * dt, so use that as the scale
+np.testing.assert_allclose(Q, np.zeros((2, 2)), atol=sigma**2 * dt * 10)
+```
+
+This prevents tests that pass by coincidence and break when parameters change.
+
 ## Tech Stack
 
 ```
@@ -149,7 +189,7 @@ Do NOT install or use: sklearn (not needed), tensorflow, pytorch, pandas (only i
 
 - Source code: `src/`
 - Experiments: `experiments/`
-- Tests: `tests/` (82 tests)
+- Tests: `tests/` (101 tests)
 - Figures output: `figures/` (gitignored PNGs)
 - Reports output: `reports/` (gitignored TXT reports from experiments)
 - Notebooks: `notebooks/`
@@ -191,9 +231,29 @@ Phase 4 — Experiments ✅ COMPLETE (all verified with text reports)
   17. experiments/04_regime_detection.py
   18. experiments/05_backtest_comparison.py
 
-Phase 5 — Extensions (next)
+Phase 5 — Extensions
   19. experiments/06_em_vs_mcmc.py
   20. experiments/07_multi_asset.py
+
+Phase 6 — Langevin Model ✅ COMPLETE (Issue #41)
+  21. src/langevin/model.py     + tests/test_langevin_model.py (19 tests)
+
+Phase 7 — Kalman Filter ✅ COMPLETE (Issue #42)
+  22. src/langevin/kalman.py    + tests/test_kalman.py (18 tests)
+
+Phase 8 — Standard Particle Filter (Issue #43, next)
+  23. src/langevin/particle.py  + tests/test_particle.py
+
+Phase 9 — RBPF (Issues #44, #45)
+  24. src/langevin/rbpf.py      + tests/test_rbpf.py
+  25. src/langevin/utils.py
+
+Phase 10 — RBPF Experiments (Issues #46-#50)
+  26. experiments/12_kalman_filter_intro.py
+  27. experiments/13_langevin_model.py
+  28. experiments/14_particle_filter_baseline.py
+  29. experiments/15_rbpf_trading.py
+  30. experiments/16_hmm_vs_rbpf.py
 ```
 
 ## Key Results (SPY 2015-2024)
