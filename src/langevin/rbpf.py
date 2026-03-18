@@ -153,6 +153,12 @@ def rbpf_predict_update(
         raise ValueError(f"dt must be > 0, got {dt}")
     if sigma_obs_sq <= 0:
         raise ValueError(f"sigma_obs_sq must be > 0, got {sigma_obs_sq}")
+    if theta > 0:
+        raise ValueError(f"theta must be <= 0 for stable dynamics, got {theta}")
+    if lambda_J < 0:
+        raise ValueError(f"lambda_J must be >= 0, got {lambda_J}")
+    if sigma_J < 0:
+        raise ValueError(f"sigma_J must be >= 0, got {sigma_J}")
 
     if rng is None:
         rng = np.random.default_rng()
@@ -363,6 +369,17 @@ def run_rbpf(
     n_eff_history : np.ndarray, shape (T,)
         Effective sample size at each timestep: N_eff = 1 / sum(W_i^2).
     """
+    if dt <= 0:
+        raise ValueError(f"dt must be > 0, got {dt}")
+    if sigma_obs_sq <= 0:
+        raise ValueError(f"sigma_obs_sq must be > 0, got {sigma_obs_sq}")
+    if theta > 0:
+        raise ValueError(f"theta must be <= 0 for stable dynamics, got {theta}")
+    if lambda_J < 0:
+        raise ValueError(f"lambda_J must be >= 0, got {lambda_J}")
+    if sigma_J < 0:
+        raise ValueError(f"sigma_J must be >= 0, got {sigma_J}")
+
     if rng is None:
         rng = np.random.default_rng()
 

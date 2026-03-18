@@ -261,6 +261,39 @@ class TestRBPFPredictUpdate:
                 G=self.G, sigma_obs_sq=-0.1,
             )
 
+    def test_invalid_theta_positive(self):
+        """theta > 0 raises ValueError."""
+        particles = initialize_rbpf_particles(5, self.mu0, self.C0)
+        with pytest.raises(ValueError, match="theta must be <= 0"):
+            rbpf_predict_update(
+                particles, observation=100.0,
+                theta=0.5, sigma=self.sigma, dt=self.dt,
+                lambda_J=0.0, mu_J=0.0, sigma_J=0.0,
+                G=self.G, sigma_obs_sq=self.sigma_obs_sq,
+            )
+
+    def test_invalid_lambda_J_negative(self):
+        """lambda_J < 0 raises ValueError."""
+        particles = initialize_rbpf_particles(5, self.mu0, self.C0)
+        with pytest.raises(ValueError, match="lambda_J must be >= 0"):
+            rbpf_predict_update(
+                particles, observation=100.0,
+                theta=self.theta, sigma=self.sigma, dt=self.dt,
+                lambda_J=-1.0, mu_J=0.0, sigma_J=0.0,
+                G=self.G, sigma_obs_sq=self.sigma_obs_sq,
+            )
+
+    def test_invalid_sigma_J_negative(self):
+        """sigma_J < 0 raises ValueError."""
+        particles = initialize_rbpf_particles(5, self.mu0, self.C0)
+        with pytest.raises(ValueError, match="sigma_J must be >= 0"):
+            rbpf_predict_update(
+                particles, observation=100.0,
+                theta=self.theta, sigma=self.sigma, dt=self.dt,
+                lambda_J=0.0, mu_J=0.0, sigma_J=-0.5,
+                G=self.G, sigma_obs_sq=self.sigma_obs_sq,
+            )
+
     def test_multi_step_no_jumps_matches_kalman(self):
         """Running RBPF predict-update sequentially with lambda_J=0 matches full Kalman filter."""
         from src.langevin.model import discretize_langevin
@@ -469,7 +502,7 @@ class TestRunRBPF:
         )
 
         # Run RBPF with no jumps
-        rbpf_means, _, _, _, _ = run_rbpf(
+        rbpf_means, _, _, rbpf_total_ll, _ = run_rbpf(
             obs, N, self.theta, self.sigma, self.sigma_obs_sq,
             lambda_J=0.0, mu_J=0.0, sigma_J=0.0,
             mu0=self.mu0, C0=self.C0, dt=self.dt,
@@ -480,6 +513,13 @@ class TestRunRBPF:
         np.testing.assert_allclose(
             rbpf_means, kf_means, atol=1e-10,
             err_msg="RBPF (no jumps) should match Kalman filter exactly",
+        )
+
+        # Total log-likelihood should also match (SMC estimate = exact KF LL
+        # when all particles are identical, i.e. no jump diversity)
+        np.testing.assert_allclose(
+            rbpf_total_ll, kf_total_ll, rtol=0.01,
+            err_msg="RBPF total LL should approximate KF total LL",
         )
 
     def test_rbpf_outperforms_pf_variance(self):
@@ -587,5 +627,53 @@ class TestRunRBPF:
         )
         assert means.shape == (T, 2)
         assert np.all(np.isfinite(means))
-        # N_eff should always be 1 with a single particle
-        np.testing.assert_allclose(n_eff, 1.0, atol=1e-10)
+        # N_eff = 1 / sum(W^2) = 1 / 1^2 = 1.0 exactly for N=1.
+        # Tolerance: weight normalization involves exp/log, so allow
+        # N_particles * machine epsilon as rounding margin.
+        N_particles = 1
+        np.testing.assert_allclose(n_eff, 1.0, atol=N_particles * np.finfo(float).eps * 10)
+
+    def test_invalid_dt(self):
+        """dt <= 0 raises ValueError."""
+        with pytest.raises(ValueError, match="dt must be > 0"):
+            run_rbpf(
+                np.array([1.0]), 5, theta=-0.5, sigma=0.3,
+                sigma_obs_sq=0.1, lambda_J=0.0, mu_J=0.0, sigma_J=0.0,
+                mu0=np.zeros(2), C0=np.eye(2), dt=0.0,
+            )
+
+    def test_invalid_sigma_obs_sq(self):
+        """sigma_obs_sq <= 0 raises ValueError."""
+        with pytest.raises(ValueError, match="sigma_obs_sq must be > 0"):
+            run_rbpf(
+                np.array([1.0]), 5, theta=-0.5, sigma=0.3,
+                sigma_obs_sq=-1.0, lambda_J=0.0, mu_J=0.0, sigma_J=0.0,
+                mu0=np.zeros(2), C0=np.eye(2), dt=1.0,
+            )
+
+    def test_invalid_theta_positive(self):
+        """theta > 0 raises ValueError."""
+        with pytest.raises(ValueError, match="theta must be <= 0"):
+            run_rbpf(
+                np.array([1.0]), 5, theta=0.5, sigma=0.3,
+                sigma_obs_sq=0.1, lambda_J=0.0, mu_J=0.0, sigma_J=0.0,
+                mu0=np.zeros(2), C0=np.eye(2), dt=1.0,
+            )
+
+    def test_invalid_lambda_J_negative(self):
+        """lambda_J < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="lambda_J must be >= 0"):
+            run_rbpf(
+                np.array([1.0]), 5, theta=-0.5, sigma=0.3,
+                sigma_obs_sq=0.1, lambda_J=-1.0, mu_J=0.0, sigma_J=0.0,
+                mu0=np.zeros(2), C0=np.eye(2), dt=1.0,
+            )
+
+    def test_invalid_sigma_J_negative(self):
+        """sigma_J < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="sigma_J must be >= 0"):
+            run_rbpf(
+                np.array([1.0]), 5, theta=-0.5, sigma=0.3,
+                sigma_obs_sq=0.1, lambda_J=0.0, mu_J=0.0, sigma_J=-0.5,
+                mu0=np.zeros(2), C0=np.eye(2), dt=1.0,
+            )
