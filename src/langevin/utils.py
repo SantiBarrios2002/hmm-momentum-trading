@@ -11,10 +11,11 @@ def estimate_langevin_params(
     log_returns: NDArray,
     dt: float = 1.0,
 ) -> dict:
-    """Estimate Langevin jump-diffusion parameters from log-returns via method of moments (Paper §IV-C, Table I).
+    """Estimate Langevin jump-diffusion parameters from log-returns via method-of-moments heuristics.
 
-    The paper manually tunes parameters from SPY data; this function provides
-    a principled initialization using method-of-moments heuristics:
+    This is NOT a reproduction of a specific paper formula.  The paper (§IV-C,
+    Table I) manually tunes parameters from SPY data; this function provides
+    a principled data-driven initialization for those same parameters:
 
         1. theta:     estimated from AR(1) coefficient of differenced returns
                       theta = log(phi) / dt, where phi = autocorrelation lag-1
@@ -81,8 +82,11 @@ def estimate_langevin_params(
     theta = min(theta, -0.01 / dt)
 
     # --- sigma from residual volatility ---
-    # For an OU process, stationary variance = sigma^2 / (2 |theta|)
-    # Approximate: sigma = ret_std * sqrt(2 * |theta|)
+    # For an OU process at stationarity: Var[x2] = sigma^2 / (2*|theta|)
+    # So sigma = sqrt(2*|theta|) * ret_std.
+    # If theta came from the AR(1) path, ret_std ≈ sqrt(Var[x2]), giving a
+    # consistent estimate.  If theta is the default (-0.5/dt), this sets
+    # sigma so the stationary std of x2 equals ret_std.
     sigma = ret_std * np.sqrt(2.0 * abs(theta))
 
     # --- sigma_obs: observation noise as fraction of total volatility ---
@@ -132,26 +136,20 @@ def trend_to_trading_signal(
 ) -> NDArray:
     """Nonlinear transfer function from trend changes to trading signals (Paper §IV-D, Eq 46).
 
-    Converts raw trend changes into bounded trading signals using the
-    soft-sign transfer function:
-
-        delta_t = x2_t - x2_{t-1}           (trend change)
+    The paper defines the signal as (Eq 46):
 
         Z_t = sign(delta_t) / sqrt(delta_t^2 + sigma_delta^2)
 
-    This is NOT a simple sign function — it has two key properties:
-    1. Bounded in [-1/sigma_delta, 1/sigma_delta] — clips extreme signals
-    2. Smooth transition through zero — avoids excessive position flipping
+    where delta_t = x2_t - x2_{t-1} (trend change).  This maps to
+    [-1/sigma_delta, 1/sigma_delta] and is discontinuous at delta = 0.
 
-    The signal is further normalized so Z_t ∈ [-1, 1] by multiplying by
-    sigma_delta:
+    We implement the normalized, continuous variant:
 
         Z_t = delta_t / sqrt(delta_t^2 + sigma_delta^2)
 
-    Note: the paper writes sign(delta) / sqrt(delta^2 + sigma_delta^2), but
-    this is equivalent to delta / sqrt(delta^2 + sigma_delta^2) when delta != 0,
-    and gives Z = 0 when delta = 0. We use the latter form as it is continuous
-    and differentiable everywhere.
+    which maps to [-1, 1] and is differentiable everywhere.  The two forms
+    agree in sign and monotonicity; they differ only in scale (ours is
+    bounded by 1, the paper's by 1/sigma_delta) and smoothness at zero.
 
     Parameters
     ----------
