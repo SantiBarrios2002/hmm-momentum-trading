@@ -130,7 +130,8 @@ def main():
     split = int(len(returns) * 0.7)
     train_returns = returns.iloc[:split]
     test_returns = returns.iloc[split:]
-    test_log_prices = log_prices[split + 1:]  # +1 because returns loses 1 element
+    # Start at last training price so PF has the bridge observation
+    test_log_prices = log_prices[split:]
 
     log(f"Train: {train_returns.index.min().date()} to {train_returns.index.max().date()} "
         f"({len(train_returns)} days)")
@@ -151,11 +152,11 @@ def main():
     log("\n--- Running standard particle filter on test data ---")
     rng = np.random.default_rng(SEED)
 
-    # Prior: centered at first observation, zero trend
-    # Trend prior uses stationary variance: sigma^2 / (2*|theta|) = ret_std^2
+    # Prior: diffuse price level (observed directly, quickly corrected),
+    # stationary variance for trend component
     trend_stationary_var = params['sigma']**2 / (2.0 * abs(params['theta']))
     mu0 = np.array([test_log_prices[0], 0.0])
-    C0 = np.diag([params['sigma_obs']**2, trend_stationary_var])
+    C0 = np.diag([1.0, trend_stationary_var])  # diffuse price prior
 
     sigma_obs_sq = params['sigma_obs']**2
 
@@ -182,11 +183,12 @@ def main():
     filtered_trend = pf_means[:, 1]  # trend component x2
     signals_raw = trend_to_trading_signal(filtered_trend, sigma_delta=SIGMA_DELTA)
 
-    # signals_raw has length T_test - 1; assign to positions 1..T_test-1
+    # signals_raw has length len(test_log_prices)-1 = T_test;
+    # we need T_test signals aligned with test_returns
     # signals[0] = 0.0 (flat position at start, no trend change yet)
     T_test = len(test_returns)
     signals = np.zeros(T_test)
-    signals[1:] = signals_raw
+    signals[1:] = signals_raw[:T_test - 1]
 
     log(f"Signal range: [{signals.min():.4f}, {signals.max():.4f}]")
     log(f"Signal mean:  {signals.mean():.4f}")
