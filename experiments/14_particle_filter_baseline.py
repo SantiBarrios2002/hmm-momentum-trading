@@ -152,8 +152,10 @@ def main():
     rng = np.random.default_rng(SEED)
 
     # Prior: centered at first observation, zero trend
+    # Trend prior uses stationary variance: sigma^2 / (2*|theta|) = ret_std^2
+    trend_stationary_var = params['sigma']**2 / (2.0 * abs(params['theta']))
     mu0 = np.array([test_log_prices[0], 0.0])
-    C0 = np.diag([params['sigma_obs']**2, params['sigma']**2])
+    C0 = np.diag([params['sigma_obs']**2, trend_stationary_var])
 
     sigma_obs_sq = params['sigma_obs']**2
 
@@ -180,14 +182,11 @@ def main():
     filtered_trend = pf_means[:, 1]  # trend component x2
     signals_raw = trend_to_trading_signal(filtered_trend, sigma_delta=SIGMA_DELTA)
 
-    # Pad signals to match test_returns length (first signal is NaN → 0)
+    # signals_raw has length T_test - 1; assign to positions 1..T_test-1
+    # signals[0] = 0.0 (flat position at start, no trend change yet)
     T_test = len(test_returns)
-    T_obs = len(test_log_prices)
     signals = np.zeros(T_test)
-    # signals_raw has length T_obs - 1; map back to test period
-    # test_log_prices[0] corresponds to test_returns.index[0]
-    # signals_raw[t] = signal at time t+1 (based on trend change from t to t+1)
-    signals[1:T_obs] = signals_raw[:T_test - 1] if T_obs >= T_test else signals_raw
+    signals[1:] = signals_raw
 
     log(f"Signal range: [{signals.min():.4f}, {signals.max():.4f}]")
     log(f"Signal mean:  {signals.mean():.4f}")
