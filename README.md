@@ -1,12 +1,16 @@
-# HMM Momentum Trading
+# HMM & RBPF Momentum Trading
 
-Reproduction of Christensen, Turner & Godsill (2020), *"Hidden Markov Models Applied To Intraday Momentum Trading With Side Information"* (arXiv:2006.08307), for the course Advanced Signal Processing: Tools and Applications (ASPTA) at UPC Barcelona.
+Reproduction and comparison of two regime-switching approaches for the course Advanced Signal Processing: Tools and Applications (ASPTA) at UPC Barcelona:
+
+1. **HMM (2020 paper):** Christensen, Turner & Godsill, *"Hidden Markov Models Applied To Intraday Momentum Trading With Side Information"* (arXiv:2006.08307)
+2. **RBPF (2012 paper):** Christensen, Godsill & Turner, *"Bayesian Methods for Jump-Diffusion Langevin Models"* — Rao-Blackwellized particle filtering for continuous-time trend estimation
 
 ## Overview
 
-A 3-state Gaussian Hidden Markov Model detects latent momentum regimes (downtrend / neutral / uptrend) from noisy log-returns and generates trading signals via Bayesian filtering.
+A 3-state Gaussian Hidden Markov Model detects latent momentum regimes (downtrend / neutral / uptrend) from noisy log-returns and generates trading signals via Bayesian filtering. As an extension, a Rao-Blackwellized Particle Filter (RBPF) estimates trends from a continuous-time Langevin jump-diffusion model and is compared head-to-head against the HMM.
 
 ```
+Layer 5: Langevin / RBPF Engine       <- Kalman filter, particle filter, RBPF
 Layer 4: Experiments & Extensions     <- what you present
 Layer 3: Trading Strategy & Backtest  <- applies the model to financial data
 Layer 2: HMM Engine                   <- forward, backward, Baum-Welch, Viterbi
@@ -25,7 +29,7 @@ pip install -r requirements.txt
 ## Running Tests
 
 ```bash
-pytest -v   # 101 tests across all layers
+pytest -v   # 247 tests across all layers
 ```
 
 ## Project Structure
@@ -44,6 +48,12 @@ src/
     model_selection.py     # AIC / BIC for choosing K
     inference.py           # online predict-update loop (Paper S6, Alg 4)
     utils.py               # shared helpers: sort_states, train_best_model
+  langevin/
+    model.py               # Langevin jump-diffusion SDE (2012 Paper §II)
+    kalman.py              # Kalman filter predict/update (2012 Paper §III-A)
+    particle.py            # standard bootstrap particle filter (2012 Paper §III-B)
+    rbpf.py                # Rao-Blackwellized particle filter (2012 Paper §III-C)
+    utils.py               # parameter estimation, trading signal transfer function
   strategy/
     signals.py             # convert predictions to trading signals
     backtest.py            # simulate P&L with transaction costs
@@ -63,8 +73,13 @@ experiments/
   09_rolling_backtest.py   # Tier 1: expanding-window robustness backtest
   10_signal_refinement.py  # Tier 3: no-trade zone + EMA smoothing grid search
   11_robustness_test.py    # Tier 3: robustness across tickers and periods
+  12_kalman_filter_intro.py # Kalman filter on synthetic Langevin data
+  13_langevin_model.py     # RBPF jump detection on synthetic data (Paper Fig 3)
+  14_particle_filter_baseline.py # Standard PF baseline on SPY
+  15_rbpf_trading.py       # RBPF trading: jumps ON vs OFF
+  16_hmm_vs_rbpf.py        # Head-to-head: HMM vs RBPF vs PF vs B&H
 
-tests/                     # pytest suite (101 tests)
+tests/                     # pytest suite (247 tests)
 docs/                      # paper PDFs, architecture docs, math mappings
 figures/                   # output directory for experiment plots
 reports/                   # output directory for experiment text reports
@@ -87,6 +102,11 @@ reports/                   # output directory for experiment text reports
 | Baum-Welch (EM) | `src/hmm/baum_welch.py` | S3.2, Algorithm 1 lines 17-21 |
 | Viterbi | `src/hmm/viterbi.py` | S2.2, Problem 2 |
 | Online Inference | `src/hmm/inference.py` | S6, Algorithm 4 |
+| Langevin SDE | `src/langevin/model.py` | 2012 Paper §II, Eq 1-5 |
+| Kalman Filter | `src/langevin/kalman.py` | 2012 Paper §III-A, Eq 22-30 |
+| Standard PF | `src/langevin/particle.py` | 2012 Paper §III-B, Eq 38-43 |
+| RBPF | `src/langevin/rbpf.py` | 2012 Paper §III-C, Eq 44-48 |
+| Trading Signal | `src/langevin/utils.py` | 2012 Paper §IV-D, Eq 46 |
 
 ## Running Experiments
 
@@ -104,6 +124,13 @@ python experiments/08_k3_vs_k4.py
 python experiments/09_rolling_backtest.py
 python experiments/10_signal_refinement.py
 python experiments/11_robustness_test.py
+
+# Langevin / RBPF experiments
+python experiments/12_kalman_filter_intro.py
+python experiments/13_langevin_model.py
+python experiments/14_particle_filter_baseline.py
+python experiments/15_rbpf_trading.py
+python experiments/16_hmm_vs_rbpf.py
 ```
 
 ## Results (SPY, 2015-2024)
@@ -266,7 +293,96 @@ We test the full HMM pipeline on 6 configurations: 4 tickers (SPY, QQQ, IWM, EEM
 ![Sharpe comparison](figures/11_robustness_sharpe.png)
 ![Drawdown comparison](figures/11_robustness_drawdown.png)
 
+---
+
+## Langevin / RBPF Results (SPY, 2015-2024)
+
+### 12. Kalman filter on synthetic Langevin data
+
+We validate the Kalman filter implementation on synthetic data from a Langevin jump-diffusion model (no jumps). The filter tracks both the log-price and the latent trend component, with residual analysis confirming correct operation.
+
+| Metric | Value |
+|--------|-------|
+| Trend within 2σ band | 96.4% (target >95%) |
+| Price RMSE | 0.0095 |
+| Trend RMSE | 0.0136 |
+| Residual mean | 0.025 (≈0) |
+| Residual std | 1.02 (≈1) |
+| Log-likelihood | 1187.6 |
+
+The standardized residuals are approximately N(0,1) with 5.6% outside ±2σ (expected ~5%), confirming the filter is correctly specified.
+
+![Kalman tracking](figures/12_kalman_tracking.png)
+![Kalman residuals](figures/12_kalman_residuals.png)
+
+### 13. RBPF jump detection (Paper Figure 3)
+
+We reproduce Figure 3 from the 2012 paper: RBPF on synthetic jump-diffusion data with known jump locations. The RBPF analytically marginalizes the continuous state (price + trend) via the Kalman filter and samples only the discrete jump history.
+
+| Metric | Value |
+|--------|-------|
+| True jumps | 12 |
+| Detected jumps | 16 (9 TP, 1 FP) |
+| Detection rate | 75.0% (target >70%) |
+| False positive rate | 6.2% |
+| RBPF trend RMSE | 0.0247 |
+| Standard PF trend RMSE | 0.0266 |
+
+The RBPF achieves 7% lower trend RMSE than the standard particle filter, demonstrating the Rao-Blackwell variance reduction on synthetic data where the model is correctly specified.
+
+![RBPF jump detection](figures/13_jump_detection.png)
+
+### 14. Standard particle filter baseline on SPY
+
+The standard (bootstrap) particle filter serves as a baseline — it samples the full 2-D state (price + trend) with particles, unlike the RBPF which analytically marginalizes the continuous state.
+
+| Strategy | Sharpe | Ann. Return | Max Drawdown | Turnover |
+|----------|--------|-------------|--------------|----------|
+| Standard PF | -1.44 | -22.89% | 56.36% | 1.3034 |
+| Buy-and-Hold | 0.40 | 5.57% | 27.06% | 0.0000 |
+
+The PF produces extremely noisy trading signals (turnover 1.30 — complete portfolio reversal every day), destroying any trend-following edge with transaction costs.
+
+![PF cumulative returns](figures/14_pf_cumulative_returns.png)
+
+### 15. RBPF trading: jumps ON vs OFF
+
+We compare the RBPF with jump modeling enabled vs disabled to isolate the contribution of Poisson jump detection to trading performance.
+
+| Strategy | Sharpe | Ann. Return | Max Drawdown | Turnover |
+|----------|--------|-------------|--------------|----------|
+| RBPF (jumps ON) | -1.77 | -27.18% | 61.85% | 1.3656 |
+| RBPF (jumps OFF) | -1.77 | -27.25% | 61.96% | 1.3617 |
+| Buy-and-Hold | 0.40 | 5.57% | 27.06% | 0.0000 |
+
+Jump modeling improves log-likelihood by +62 nats (1772 vs 1710) but has negligible impact on trading performance (+0.3% Sharpe improvement). The high turnover (~1.37) is the dominant factor, not jump detection.
+
+![RBPF jumps ON vs OFF](figures/15_jumps_on_vs_off.png)
+
+### 16. HMM vs RBPF head-to-head (THE MAIN RESULT)
+
+The definitive comparison: HMM (2020 paper) vs RBPF (2012 paper) vs standard PF vs buy-and-hold, all on the same SPY data with identical train/test split and transaction costs.
+
+| Strategy | Sharpe | Ann. Return | Max Drawdown | Turnover |
+|----------|--------|-------------|--------------|----------|
+| **HMM (weighted vote)** | **0.54** | **7.77%** | **20.33%** | **0.043** |
+| Buy-and-Hold | 0.40 | 5.57% | 27.06% | 0.000 |
+| Standard PF | -1.66 | -25.78% | 61.47% | 1.284 |
+| RBPF | -1.77 | -27.18% | 61.85% | 1.366 |
+
+**Verdict: HMM decisively outperforms RBPF on out-of-sample SPY trading.**
+
+Key insights:
+- **RBPF achieves higher log-likelihood** (1772 vs PF's -4206), confirming the Rao-Blackwell benefit for state estimation
+- **Better state estimation ≠ better trading signals** — the continuous Langevin model produces noisy trend estimates that cause excessive turnover (31.5x higher than HMM)
+- **Signal correlation between HMM and RBPF ≈ 0** — the two approaches extract fundamentally different information from the same data
+- The discrete regime-switching model (HMM) produces cleaner, more actionable trading signals than the continuous Langevin model (RBPF)
+
+![HMM vs RBPF cumulative](figures/16_hmm_vs_rbpf_cumulative.png)
+![HMM vs RBPF signals](figures/16_signal_correlation.png)
+
 ## References
 
 - Christensen, H.L., Turner, R.E. & Godsill, S.J. (2020). *Hidden Markov Models Applied To Intraday Momentum Trading With Side Information*. arXiv:2006.08307.
+- Christensen, H.L., Godsill, S.J. & Turner, R.E. (2012). *Bayesian Methods for Jump-Diffusion Langevin Models*. Cambridge Signal Processing Lab.
 - Rabiner, L.R. (1989). *A Tutorial on Hidden Markov Models and Selected Applications in Speech Recognition*. Proceedings of the IEEE, 77(2), 257-286.

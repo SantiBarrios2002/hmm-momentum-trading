@@ -11,6 +11,7 @@ venv/
 .env
 *.ipynb_checkpoints/
 figures/*.pdf
+scripts/*
 
 # Gitignore all PNGs except those referenced in README
 figures/*.png
@@ -34,4 +35,5 @@ figures/*.png
 reports/*.txt
 docs/*
 !docs/SLIDE_OUTLINE.md
+data/databento/
 .claude/

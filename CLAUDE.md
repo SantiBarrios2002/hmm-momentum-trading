@@ -189,7 +189,7 @@ Do NOT install or use: sklearn (not needed), tensorflow, pytorch, pandas (only i
 
 - Source code: `src/`
 - Experiments: `experiments/`
-- Tests: `tests/` (101 tests)
+- Tests: `tests/` (247 tests)
 - Figures output: `figures/` (gitignored PNGs)
 - Reports output: `reports/` (gitignored TXT reports from experiments)
 - Notebooks: `notebooks/`
@@ -231,24 +231,24 @@ Phase 4 — Experiments ✅ COMPLETE (all verified with text reports)
   17. experiments/04_regime_detection.py
   18. experiments/05_backtest_comparison.py
 
-Phase 5 — Extensions
+Phase 5 — Extensions ✅ COMPLETE
   19. experiments/06_em_vs_mcmc.py
   20. experiments/07_multi_asset.py
 
-Phase 6 — Langevin Model ✅ COMPLETE (Issue #41)
+Phase 6 — Langevin Model ✅ COMPLETE (Issue #41, PR #51)
   21. src/langevin/model.py     + tests/test_langevin_model.py (19 tests)
 
-Phase 7 — Kalman Filter ✅ COMPLETE (Issue #42)
+Phase 7 — Kalman Filter ✅ COMPLETE (Issue #42, PR #52-#53)
   22. src/langevin/kalman.py    + tests/test_kalman.py (18 tests)
 
-Phase 8 — Standard Particle Filter (Issue #43, next)
+Phase 8 — Standard Particle Filter ✅ COMPLETE (Issue #43, PR #54)
   23. src/langevin/particle.py  + tests/test_particle.py
 
-Phase 9 — RBPF (Issues #44, #45)
+Phase 9 — RBPF ✅ COMPLETE (Issues #44-#45, PR #55-#56)
   24. src/langevin/rbpf.py      + tests/test_rbpf.py
   25. src/langevin/utils.py
 
-Phase 10 — RBPF Experiments (Issues #46-#50)
+Phase 10 — RBPF Experiments ✅ COMPLETE (Issues #46-#50, PR #57-#62)
   26. experiments/12_kalman_filter_intro.py
   27. experiments/13_langevin_model.py
   28. experiments/14_particle_filter_baseline.py
@@ -258,9 +258,22 @@ Phase 10 — RBPF Experiments (Issues #46-#50)
 
 ## Key Results (SPY 2015-2024)
 
+### HMM (2020 paper)
 - Model selection: AIC and BIC both favor K=4; K=3 used for interpretability
 - 3 regimes: bearish (3.6% of time, ann. vol 56%), neutral (40%), bullish (56%, ann. vol 8.5%)
 - Out-of-sample (2022-2024): weighted vote Sharpe 0.54 vs buy-and-hold 0.40, max drawdown 20% vs 27%
+
+### Langevin / RBPF (2012 paper)
+- Kalman filter validated on synthetic data: 96.4% trend within 2σ, residuals ~N(0,1)
+- RBPF jump detection on synthetic data: 75% detection rate, 6.2% FP rate, 7% lower RMSE than standard PF
+- RBPF achieves higher log-likelihood than standard PF (1772 vs -4206), confirming Rao-Blackwell benefit
+- Both PF and RBPF produce poor trading signals: Sharpe -1.44 (PF), -1.77 (RBPF) due to excessive turnover (~1.3-1.4)
+- Jump modeling improves LL by +62 nats but has negligible trading impact (+0.3% Sharpe)
+
+### Main Result (Experiment 16)
+- **HMM (Sharpe 0.54) decisively beats RBPF (-1.77) on out-of-sample SPY trading**
+- RBPF turnover is 31.5x HMM turnover — better state estimation does not mean better trading signals
+- Signal correlation HMM vs RBPF ≈ 0 — fundamentally different approaches
 
 ## What "Done" Looks Like For Each Function
 
