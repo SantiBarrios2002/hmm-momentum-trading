@@ -245,8 +245,10 @@ def main():
 
     rbpf_trend = rbpf_means[:, 1]
     rbpf_signals_raw = trend_to_trading_signal(rbpf_trend, sigma_delta=SIGMA_DELTA)
-    rbpf_signals = np.zeros(T_test)
-    rbpf_signals[1:] = rbpf_signals_raw[:T_test - 1]
+    # rbpf_signals_raw[t] uses trend[t] and trend[t+1], available after obs t+1
+    # backtest adds its own 1-period execution lag, so pass raw signals directly
+    # with a leading zero (no signal before first trend change)
+    rbpf_signals = np.concatenate([[0.0], rbpf_signals_raw])[:T_test]
 
     # ── 6. Run Standard PF ────────────────────────────────────────────
     log("\n--- Running Standard PF ---")
@@ -264,8 +266,7 @@ def main():
 
     pf_trend = pf_means[:, 1]
     pf_signals_raw = trend_to_trading_signal(pf_trend, sigma_delta=SIGMA_DELTA)
-    pf_signals = np.zeros(T_test)
-    pf_signals[1:] = pf_signals_raw[:T_test - 1]
+    pf_signals = np.concatenate([[0.0], pf_signals_raw])[:T_test]
 
     # ── 7. Backtest all strategies ────────────────────────────────────
     log("\n--- Backtest Results ---")
@@ -304,16 +305,18 @@ def main():
 
     # ── 9. Variance comparison (Rao-Blackwell) ────────────────────────
     log("\n--- Rao-Blackwell Variance Reduction ---")
-    rbpf_trend_var = np.var(rbpf_stds[:T_test, 1])
-    pf_trend_var = np.var(pf_stds[:T_test, 1])
-    if pf_trend_var > 0:
-        reduction = (1.0 - rbpf_trend_var / pf_trend_var) * 100
-        log(f"RBPF trend std variance: {rbpf_trend_var:.8f}")
-        log(f"PF trend std variance:   {pf_trend_var:.8f}")
+    # Rao-Blackwell: compare mean posterior VARIANCE (= mean of squared stds)
+    # This is E[Var[x2 | y_{1:t}]], the quantity the theorem minimizes
+    rbpf_mean_var = np.mean(rbpf_stds[:T_test, 1] ** 2)
+    pf_mean_var = np.mean(pf_stds[:T_test, 1] ** 2)
+    if pf_mean_var > 0:
+        reduction = (1.0 - rbpf_mean_var / pf_mean_var) * 100
+        log(f"RBPF mean posterior var: {rbpf_mean_var:.8f}")
+        log(f"PF mean posterior var:   {pf_mean_var:.8f}")
         log(f"Variance reduction:      {reduction:.1f}%")
     else:
-        log(f"RBPF trend std variance: {rbpf_trend_var:.8f}")
-        log(f"PF trend std variance:   {pf_trend_var:.8f}")
+        log(f"RBPF mean posterior var: {rbpf_mean_var:.8f}")
+        log(f"PF mean posterior var:   {pf_mean_var:.8f}")
 
     # ── 10. THE VERDICT ───────────────────────────────────────────────
     log("\n" + "=" * 68)
