@@ -36,8 +36,8 @@ DT = 1.0            # daily timestep
 T = 500             # number of observations
 SEED = 42           # reproducibility
 
-FIGURES_DIR = Path("figures")
-REPORTS_DIR = Path("reports")
+FIGURES_DIR = PROJECT_ROOT / "figures"
+REPORTS_DIR = PROJECT_ROOT / "reports"
 
 
 def _generate_langevin_data(theta, sigma, sigma_obs, dt, T, rng):
@@ -52,9 +52,6 @@ def _generate_langevin_data(theta, sigma, sigma_obs, dt, T, rng):
     F, Q = discretize_langevin(theta, sigma, dt)
     G = observation_matrix()
 
-    # Cholesky of Q for sampling process noise
-    L_Q = np.linalg.cholesky(Q + 1e-15 * np.eye(2))
-
     true_states = np.zeros((T, 2))
     observations = np.zeros(T)
 
@@ -63,7 +60,9 @@ def _generate_langevin_data(theta, sigma, sigma_obs, dt, T, rng):
 
     for t in range(T):
         if t > 0:
-            w = L_Q @ rng.standard_normal(2)
+            # Q is rank-1 (no direct price noise), so use multivariate_normal
+            # which handles singular covariances via eigendecomposition
+            w = rng.multivariate_normal(np.zeros(2), Q)
             x = F @ x + w
         true_states[t] = x
         observations[t] = (G @ x).item() + sigma_obs * rng.standard_normal()
