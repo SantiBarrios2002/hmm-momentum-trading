@@ -117,10 +117,11 @@ def _run_rbpf_strategy(test_log_prices, params, n_particles, sigma_delta,
     """Run RBPF and generate trading signals. Returns signals, filtered_trend, rbpf outputs."""
     rng = np.random.default_rng(seed)
 
-    # Prior: stationary variance for trend
+    # Prior: diffuse price level (observed directly, so prior is quickly corrected),
+    # stationary variance for trend component
     trend_stationary_var = params['sigma']**2 / (2.0 * abs(params['theta']))
     mu0 = np.array([test_log_prices[0], 0.0])
-    C0 = np.diag([params['sigma_obs']**2, trend_stationary_var])
+    C0 = np.diag([1.0, trend_stationary_var])  # diffuse price prior
     sigma_obs_sq = params['sigma_obs']**2
 
     # If jumps OFF, set lambda_J = 0, sigma_J = 0
@@ -180,7 +181,8 @@ def main():
     split = int(len(returns) * 0.7)
     train_returns = returns.iloc[:split]
     test_returns = returns.iloc[split:]
-    test_log_prices = log_prices[split + 1:]
+    # Start at last training price so RBPF has the bridge observation
+    test_log_prices = log_prices[split:]
 
     log(f"Train: {train_returns.index.min().date()} to {train_returns.index.max().date()} "
         f"({len(train_returns)} days)")
