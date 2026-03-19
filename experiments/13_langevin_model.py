@@ -96,17 +96,15 @@ def _generate_jump_diffusion_data(theta, sigma, sigma_obs, dt, T, lambda_J, mu_J
 
 def _estimate_jump_fractions(observations, N_particles, theta, sigma, sigma_obs_sq,
                               dt, lambda_J, mu_J, sigma_J, mu0, C0, rng):
-    """Run RBPF and estimate per-timestep jump fraction from particle diversity.
+    """Run RBPF step-by-step, recording the fraction of particles that jump.
 
-    The RBPF doesn't directly output jump indicators, but we can detect jumps
-    by running the filter and looking at where the filtered trend exhibits
-    sudden shifts (large |delta_trend|) relative to the no-jump baseline.
-
-    We use a simpler proxy: re-run the RBPF step-by-step and count how many
-    particles sampled a jump at each timestep.
+    Inlines the RBPF predict-update logic (instead of calling rbpf_predict_update)
+    so that the same jump samples drive both the Kalman updates AND the jump
+    fraction recording. This ensures the lower panel of Fig 3 is statistically
+    consistent with the upper panel's filtered trend.
     """
-    from src.langevin.rbpf import initialize_rbpf_particles, rbpf_predict_update, extract_rbpf_signal
-    from src.langevin.kalman import kalman_update
+    from src.langevin.rbpf import initialize_rbpf_particles, extract_rbpf_signal
+    from src.langevin.kalman import kalman_predict, kalman_update
     from src.langevin.particle import propose_jump_times
     from scipy.special import logsumexp
 
@@ -134,20 +132,55 @@ def _estimate_jump_fractions(observations, N_particles, theta, sigma, sigma_obs_
             particles = {'mu': mu_new, 'C': C_new, 'log_weights': log_w}
             jump_fractions[t] = 0.0
         else:
-            # Sample jumps explicitly to track which particles jumped
-            jump_occurred, jump_times = propose_jump_times(
+            # Sample jumps — these SAME samples drive the Kalman updates below
+            jump_occurred, jump_times_sampled = propose_jump_times(
                 N_particles, dt, lambda_J, rng=rng,
             )
             jump_fractions[t] = np.mean(jump_occurred)
 
-            # Now do the full predict-update (this re-samples jumps internally,
-            # but we already recorded the fraction above for visualization)
-            particles = rbpf_predict_update(
-                particles, observation=observations[t],
-                theta=theta, sigma=sigma, dt=dt,
-                lambda_J=lambda_J, mu_J=mu_J, sigma_J=sigma_J,
-                G=G, sigma_obs_sq=sigma_obs_sq, rng=rng,
-            )
+            # Inline predict-update using the sampled jumps
+            mu_all = particles['mu']
+            C_all = particles['C']
+            log_w = particles['log_weights'].copy()
+            mu_new = np.zeros_like(mu_all)
+            C_new = np.zeros_like(C_all)
+
+            F_nj, Q_nj = discretize_langevin(theta, sigma, dt)
+
+            for i in range(N_particles):
+                mu_i = mu_all[i]
+                C_i = C_all[i]
+
+                if not jump_occurred[i]:
+                    F = F_nj
+                    Q_total = Q_nj
+                    mu_pred = F @ mu_i
+                else:
+                    tau = jump_times_sampled[i]
+                    if tau > 0:
+                        F1, Q1 = discretize_langevin(theta, sigma, tau)
+                    else:
+                        F1, Q1 = np.eye(2), np.zeros((2, 2))
+                    dt2 = dt - tau
+                    if dt2 > 0:
+                        F2, Q2 = discretize_langevin(theta, sigma, dt2)
+                    else:
+                        F2, Q2 = np.eye(2), np.zeros((2, 2))
+                    F = F2 @ F1
+                    jump_cov = np.array([[0.0, 0.0], [0.0, sigma_J**2]])
+                    Q_total = F2 @ Q1 @ F2.T + F2 @ jump_cov @ F2.T + Q2
+                    Q_total = (Q_total + Q_total.T) / 2.0
+                    mu_pred = F @ mu_i + F2 @ np.array([0.0, mu_J])
+
+                C_pred = F @ C_i @ F.T + Q_total
+                C_pred = (C_pred + C_pred.T) / 2.0
+
+                mu_new[i], C_new[i], ll = kalman_update(
+                    mu_pred, C_pred, G, sigma_obs_sq, observations[t],
+                )
+                log_w[i] += ll
+
+            particles = {'mu': mu_new, 'C': C_new, 'log_weights': log_w}
 
         # Extract signal
         filtered_means[t], filtered_stds[t] = extract_rbpf_signal(particles)
@@ -174,7 +207,8 @@ def _detect_jumps_from_trend(filtered_means, threshold_factor=2.0):
 
     A jump is detected at t if |delta_trend_t| > threshold_factor * std(delta_trend).
     This uses std (not median) because the trend changes are approximately Gaussian
-    under no-jump conditions, so 3σ gives a natural outlier threshold.
+    under no-jump conditions, so 2σ gives a sensitive outlier threshold that
+    balances detection rate against false positives.
     """
     trend = filtered_means[:, 1]
     delta_trend = np.diff(trend)
