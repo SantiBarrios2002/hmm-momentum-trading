@@ -130,6 +130,122 @@ def estimate_langevin_params(
     }
 
 
+def estimate_langevin_params_raw(
+    price_changes: NDArray,
+    price_level: float,
+    dt: float = 1.0,
+) -> dict:
+    """Estimate Langevin parameters from raw price differences (2012 Paper §IV-C, Table I).
+
+    The 2012 paper (Christensen, Murphy & Godsill) defines the state as
+    (raw price, trend) — not (log-price, trend).  Parameters in Table I are
+    "scale factors" expressed as percentages of the initial price level.
+
+    This function mirrors estimate_langevin_params() but operates on raw price
+    differences ΔP_t = P_t - P_{t-1} instead of log-returns.  The estimation
+    logic is identical (AR(1) for theta, kurtosis for lambda_J, etc.) but the
+    resulting sigma, sigma_obs, sigma_J are in price units (e.g. USD), not
+    dimensionless log-return units.
+
+    The paper defines parameters as scale factors SF() of the initial price:
+        sigma   = SF(sigma)   * price_level
+        sigma_J = SF(sigma_J) * price_level
+
+    This function estimates the absolute parameters directly from price changes
+    and also returns the scale factors for comparison with Table I.
+
+    Parameters
+    ----------
+    price_changes : np.ndarray, shape (T,)
+        Raw price differences ΔP_t = P_t - P_{t-1}. Must have T >= 3.
+    price_level : float
+        Initial price level P_0 for computing scale factors. Must be > 0.
+    dt : float
+        Timestep in appropriate units (e.g. 1.0 for daily). Must be > 0.
+
+    Returns
+    -------
+    params : dict with keys
+        'theta'     : float — mean-reversion parameter (< 0)
+        'sigma'     : float — diffusion coefficient in price units (> 0)
+        'sigma_obs' : float — observation noise std in price units (> 0)
+        'lambda_J'  : float — jump intensity per unit time (>= 0)
+        'mu_J'      : float — mean jump size in price units
+        'sigma_J'   : float — jump size std in price units (>= 0)
+        'scale_factors' : dict — SF values relative to price_level for
+                          comparison with Table I ('sigma', 'sigma_obs', 'sigma_J')
+    """
+    if dt <= 0:
+        raise ValueError(f"dt must be > 0, got {dt}")
+    if price_level <= 0:
+        raise ValueError(f"price_level must be > 0, got {price_level}")
+    price_changes = np.asarray(price_changes, dtype=float)
+    if len(price_changes) < 3:
+        raise ValueError(f"Need at least 3 price changes, got {len(price_changes)}")
+
+    T = len(price_changes)
+    change_std = np.std(price_changes)
+
+    # Floor to avoid zero sigma/sigma_obs
+    change_std = max(change_std, 1e-10)
+
+    # --- theta from AR(1) on price changes ---
+    changes_centered = price_changes - np.mean(price_changes)
+    autocov_0 = np.sum(changes_centered**2) / T
+    autocov_1 = np.sum(changes_centered[:-1] * changes_centered[1:]) / T
+
+    if autocov_0 > 0 and autocov_1 / autocov_0 > 0:
+        phi = autocov_1 / autocov_0
+        phi = min(phi, 1.0 - 1e-9)
+        theta = np.log(phi) / dt
+    else:
+        theta = -0.5 / dt
+
+    theta = min(theta, -0.01 / dt)
+
+    # --- sigma from residual volatility (in price units) ---
+    sigma = change_std * np.sqrt(2.0 * abs(theta))
+
+    # --- sigma_obs: observation noise as fraction of price change volatility ---
+    sigma_obs = 0.1 * change_std
+
+    # --- Jump parameters from tail behavior ---
+    if change_std > 0:
+        kurtosis = np.mean(changes_centered**4) / change_std**4 - 3.0
+    else:
+        kurtosis = 0.0
+
+    if kurtosis > 0:
+        lambda_J = min(kurtosis / (3.0 * dt), 10.0 / dt)
+    else:
+        lambda_J = 0.0
+
+    mu_J = 0.0
+
+    if lambda_J > 0:
+        jump_var_fraction = min(kurtosis / (kurtosis + 3.0), 0.5)
+        sigma_J = np.sqrt(jump_var_fraction * change_std**2 / (lambda_J * dt))
+    else:
+        sigma_J = 0.0
+
+    # Scale factors relative to initial price (for comparison with Table I)
+    scale_factors = {
+        'sigma': sigma / price_level,
+        'sigma_obs': sigma_obs / price_level,
+        'sigma_J': sigma_J / price_level if sigma_J > 0 else 0.0,
+    }
+
+    return {
+        'theta': theta,
+        'sigma': sigma,
+        'sigma_obs': sigma_obs,
+        'lambda_J': lambda_J,
+        'mu_J': mu_J,
+        'sigma_J': sigma_J,
+        'scale_factors': scale_factors,
+    }
+
+
 def trend_to_trading_signal(
     trend_estimates: NDArray,
     sigma_delta: float,
