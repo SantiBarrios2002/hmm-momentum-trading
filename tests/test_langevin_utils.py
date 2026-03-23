@@ -167,29 +167,39 @@ class TestEstimateLangevinParamsRaw:
         params = estimate_langevin_params_raw(price_changes, price_level=price_level)
 
         sf = params['scale_factors']
-        np.testing.assert_allclose(sf['sigma'] * price_level, params['sigma'])
-        np.testing.assert_allclose(sf['sigma_obs'] * price_level, params['sigma_obs'])
+        # SF = param / price_level, then SF * price_level round-trips with at most
+        # 2 ULPs of floating-point error from one division and one multiplication.
+        eps = 2 * np.finfo(float).eps
+        np.testing.assert_allclose(sf['sigma'] * price_level, params['sigma'], rtol=eps)
+        np.testing.assert_allclose(sf['sigma_obs'] * price_level, params['sigma_obs'], rtol=eps)
         if params['sigma_J'] > 0:
-            np.testing.assert_allclose(sf['sigma_J'] * price_level, params['sigma_J'])
+            np.testing.assert_allclose(sf['sigma_J'] * price_level, params['sigma_J'], rtol=eps)
 
     def test_consistent_with_log_return_version(self):
-        """For small returns, raw-price and log-return params should be approximately
-        proportional (sigma_raw ≈ sigma_log * price_level)."""
+        """When price_changes = log_returns * price_level (exact scalar multiplication),
+        theta is identical and sigma scales by price_level exactly."""
         rng = np.random.default_rng(42)
         price_level = 500.0
-        # Generate log-returns, then derive price changes
+        # Exact scalar multiplication: ΔP = r * P_0 (not an approximation here,
+        # since we're constructing the inputs, not converting real prices)
         log_returns = rng.normal(0.0005, 0.01, size=500)
-        price_changes = log_returns * price_level  # first-order approx: ΔP ≈ r * P
+        price_changes = log_returns * price_level
 
         params_log = estimate_langevin_params(log_returns, dt=1.0)
         params_raw = estimate_langevin_params_raw(price_changes, price_level=price_level, dt=1.0)
 
-        # theta should be identical (dimensionless, from autocorrelation structure)
-        np.testing.assert_allclose(params_raw['theta'], params_log['theta'], rtol=0.05)
+        # theta is identical: autocorrelation phi = Cov/Var, and scalar multiplication
+        # cancels in the ratio (price_level^2 in both numerator and denominator).
+        # Only floating-point rounding differs.
+        np.testing.assert_allclose(
+            params_raw['theta'], params_log['theta'],
+            rtol=10 * np.finfo(float).eps,
+        )
 
-        # sigma_raw ≈ sigma_log * price_level (both derived from std * sqrt(2|theta|))
+        # sigma_raw = change_std * sqrt(2|theta|), change_std = ret_std * price_level,
+        # so sigma_raw / sigma_log = price_level exactly (up to float rounding).
         ratio = params_raw['sigma'] / params_log['sigma']
-        np.testing.assert_allclose(ratio, price_level, rtol=0.1)
+        np.testing.assert_allclose(ratio, price_level, rtol=1e-12)
 
     def test_higher_volatility_gives_larger_sigma(self):
         """More volatile price changes produce larger sigma estimate."""

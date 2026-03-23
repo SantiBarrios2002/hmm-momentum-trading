@@ -1,6 +1,11 @@
 """Utility functions bridging RBPF output to trading strategy (Paper §IV-C, §IV-D).
 
-Paper: Christensen, Turner & Godsill (2020), arXiv:2006.08307.
+2020 Paper: Christensen, Turner & Godsill (2020),
+    "Hidden Markov Models Applied To Intraday Momentum Trading",
+    arXiv:2006.08307.
+2012 Paper: Christensen, Murphy & Godsill (2012),
+    "Forecasting High-Frequency Futures Returns Using Online
+    Langevin Dynamics", IEEE JSTSP, vol. 6, no. 7, pp. 727-737.
 """
 
 import numpy as np
@@ -137,22 +142,39 @@ def estimate_langevin_params_raw(
 ) -> dict:
     """Estimate Langevin parameters from raw price differences (2012 Paper §IV-C, Table I).
 
-    The 2012 paper (Christensen, Murphy & Godsill) defines the state as
-    (raw price, trend) — not (log-price, trend).  Parameters in Table I are
-    "scale factors" expressed as percentages of the initial price level.
+    The 2012 paper (Christensen, Murphy & Godsill, IEEE JSTSP 2012) defines the
+    state as (raw price, trend) — not (log-price, trend).  Parameters in Table I
+    are "scale factors" (SF) expressed as fractions of the initial price level P_0.
 
-    This function mirrors estimate_langevin_params() but operates on raw price
-    differences ΔP_t = P_t - P_{t-1} instead of log-returns.  The estimation
-    logic is identical (AR(1) for theta, kurtosis for lambda_J, etc.) but the
-    resulting sigma, sigma_obs, sigma_J are in price units (e.g. USD), not
-    dimensionless log-return units.
+    Estimation steps (method-of-moments heuristics on raw price changes ΔP_t):
 
-    The paper defines parameters as scale factors SF() of the initial price:
-        sigma   = SF(sigma)   * price_level
-        sigma_J = SF(sigma_J) * price_level
+        1. theta (mean-reversion rate, dimensionless):
+             phi = Cov(ΔP_t, ΔP_{t-1}) / Var(ΔP_t)   (lag-1 autocorrelation)
+             theta = log(phi) / dt                      (OU decay rate)
+           Clamped to theta <= -0.01/dt for stability.
 
-    This function estimates the absolute parameters directly from price changes
-    and also returns the scale factors for comparison with Table I.
+        2. sigma (diffusion coefficient, price units):
+             sigma = std(ΔP) * sqrt(2 * |theta|)
+           From the OU stationary variance: Var[x2] = sigma^2 / (2|theta|),
+           so sigma = sqrt(2|theta|) * sqrt(Var[x2]) ≈ sqrt(2|theta|) * std(ΔP).
+
+        3. sigma_obs (observation noise, price units):
+             sigma_obs = 0.1 * std(ΔP)
+
+        4. lambda_J (jump intensity, per unit time):
+             kurtosis_excess = E[(ΔP - mean)^4] / std(ΔP)^4 - 3
+             lambda_J = min(kurtosis_excess / (3 * dt), 10 / dt)
+           Excess kurtosis > 0 indicates jump activity.
+
+        5. mu_J = 0 (symmetric jumps by default).
+
+        6. sigma_J (jump size std, price units):
+             jump_var_fraction = min(kurtosis / (kurtosis + 3), 0.5)
+             sigma_J = sqrt(jump_var_fraction * std(ΔP)^2 / (lambda_J * dt))
+           Decomposes total variance into diffusion + jump contributions.
+
+    Scale factors for Table I comparison:
+        SF(x) = x / P_0
 
     Parameters
     ----------
