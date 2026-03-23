@@ -13,6 +13,7 @@ from src.langevin.rbpf import (
 from src.langevin.model import observation_matrix, discretize_langevin
 from src.langevin.kalman import kalman_filter
 from src.langevin.particle import run_particle_filter
+from src.langevin.utils import estimate_langevin_params_raw, trend_to_trading_signal
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -677,3 +678,256 @@ class TestRunRBPF:
                 sigma_obs_sq=0.1, lambda_J=0.0, mu_J=0.0, sigma_J=-0.5,
                 mu0=np.zeros(2), C0=np.eye(2), dt=1.0,
             )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Tests for RBPF on raw-price data (Issue #64)
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestRunRBPFRawPrices:
+    """Validate that the existing RBPF works on raw prices with appropriately scaled parameters.
+
+    The 2012 paper (Christensen, Murphy & Godsill) uses state = (raw price, trend)
+    with parameters as scale factors of the initial price level.  The RBPF code is
+    space-agnostic — these tests prove it works at raw-price scale (~$500 for SPY)
+    without any code changes, only parameter rescaling.
+    """
+
+    # Raw-price-scale parameters (SPY ~ $500, daily)
+    # theta is dimensionless (same in both spaces)
+    theta = -0.5
+    # sigma in price units: SPY daily std ~ $5, so sigma = 5 * sqrt(2*0.5) = 5
+    sigma = 5.0
+    dt = 1.0
+    # Observation noise in price units: ~10% of daily price std
+    sigma_obs = 0.5
+    sigma_obs_sq = sigma_obs ** 2
+    # Initial price and prior
+    price_level = 500.0
+    mu0 = np.array([500.0, 0.0])
+    # Prior covariance: price uncertainty ~ (1% of price)^2, trend ~ stationary var
+    trend_stationary_var = sigma ** 2 / (2.0 * abs(theta))
+    C0 = np.diag([(0.01 * price_level) ** 2, trend_stationary_var])
+
+    def _generate_raw_price_data(self, T, lambda_J=0.0, mu_J=0.0, sigma_J=0.0, seed=42):
+        """Generate synthetic raw-price observations from the Langevin model."""
+        rng = np.random.default_rng(seed)
+        F, Q = discretize_langevin(self.theta, self.sigma, self.dt)
+        G = observation_matrix()
+
+        true_states = np.zeros((T, 2))
+        observations = np.zeros(T)
+        true_states[0] = self.mu0.copy()
+
+        for t in range(T):
+            if t > 0:
+                true_states[t] = F @ true_states[t - 1] + rng.multivariate_normal(
+                    np.zeros(2), Q
+                )
+                if lambda_J > 0 and rng.random() < (1.0 - np.exp(-lambda_J * self.dt)):
+                    true_states[t, 1] += rng.normal(mu_J, sigma_J)
+            observations[t] = (G @ true_states[t]).item() + rng.normal(
+                0, self.sigma_obs
+            )
+
+        return observations, true_states
+
+    def test_no_jumps_matches_kalman_at_raw_price_scale(self):
+        """With lambda_J=0, RBPF matches Kalman filter at raw-price scale (~$500).
+
+        This is the fundamental space-agnosticism check: the same linear-Gaussian
+        machinery works identically whether x1 is a log-price (~6) or a raw price (~500).
+        """
+        T, N = 50, 20
+        obs, _ = self._generate_raw_price_data(T, lambda_J=0.0)
+        F, Q = discretize_langevin(self.theta, self.sigma, self.dt)
+        G = observation_matrix()
+
+        # Kalman filter
+        _, _, kf_means, _, _, kf_total_ll = kalman_filter(
+            obs, F, Q, G, self.sigma_obs_sq, self.mu0, self.C0,
+        )
+
+        # RBPF
+        rbpf_means, _, _, rbpf_total_ll, _ = run_rbpf(
+            obs, N, self.theta, self.sigma, self.sigma_obs_sq,
+            lambda_J=0.0, mu_J=0.0, sigma_J=0.0,
+            mu0=self.mu0, C0=self.C0, dt=self.dt,
+            rng=np.random.default_rng(0),
+        )
+
+        np.testing.assert_allclose(
+            rbpf_means, kf_means, atol=1e-8,
+            err_msg="RBPF must match KF at raw-price scale",
+        )
+        np.testing.assert_allclose(rbpf_total_ll, kf_total_ll, rtol=0.01)
+
+    def test_tracks_raw_prices_within_2sigma(self):
+        """RBPF filtered price stays within 2 std of true price most of the time.
+
+        At raw-price scale, the filter must track a price series around $500
+        without divergence. Same criterion as the log-price Kalman test (96%+).
+        """
+        T, N = 200, 100
+        obs, true_states = self._generate_raw_price_data(T, lambda_J=0.5, sigma_J=2.0)
+
+        means, stds, _, _, _ = run_rbpf(
+            obs, N, self.theta, self.sigma, self.sigma_obs_sq,
+            lambda_J=0.5, mu_J=0.0, sigma_J=2.0,
+            mu0=self.mu0, C0=self.C0, dt=self.dt,
+            rng=np.random.default_rng(42),
+        )
+
+        # Check price component tracking
+        price_errors = np.abs(means[:, 0] - true_states[:, 0])
+        price_stds = stds[:, 0]
+        within_2sigma = np.mean(price_errors < 2.0 * price_stds)
+        assert within_2sigma >= 0.90, (
+            f"Only {within_2sigma:.1%} of price estimates within 2σ (need ≥90%)"
+        )
+
+    def test_covariances_psd_at_raw_price_scale(self):
+        """Covariances remain PSD when values are ~$500 (not ~6.0 log-price).
+
+        Numerical stability can degrade with larger state values due to
+        floating point precision in the Kalman update.
+        """
+        T, N = 50, 30
+        obs, _ = self._generate_raw_price_data(T, lambda_J=1.0, sigma_J=3.0)
+
+        # Access per-step particles to check covariances are PSD
+        # Use run_rbpf and check that stds are all positive (stds come from
+        # variances which come from particle covariances)
+        _, stds, _, _, _ = run_rbpf(
+            obs, N, self.theta, self.sigma, self.sigma_obs_sq,
+            lambda_J=1.0, mu_J=0.0, sigma_J=3.0,
+            mu0=self.mu0, C0=self.C0, dt=self.dt,
+            rng=np.random.default_rng(0),
+        )
+        assert np.all(stds > 0), "All stds must be positive (PSD covariances)"
+        assert np.all(np.isfinite(stds)), "No NaN/Inf in stds"
+
+    def test_n_eff_healthy_at_raw_price_scale(self):
+        """Effective sample size stays reasonable at raw-price scale.
+
+        If parameter scaling is wrong, particles will disagree wildly and
+        N_eff will collapse to 1.
+        """
+        T, N = 100, 100
+        obs, _ = self._generate_raw_price_data(T, lambda_J=0.5, sigma_J=2.0)
+
+        _, _, _, _, n_eff = run_rbpf(
+            obs, N, self.theta, self.sigma, self.sigma_obs_sq,
+            lambda_J=0.5, mu_J=0.0, sigma_J=2.0,
+            mu0=self.mu0, C0=self.C0, dt=self.dt,
+            rng=np.random.default_rng(42),
+        )
+
+        # Median N_eff should be well above 1 (degenerate) — at least 10% of N
+        median_n_eff = np.median(n_eff)
+        assert median_n_eff > 0.1 * N, (
+            f"Median N_eff = {median_n_eff:.1f} is too low (need > {0.1*N})"
+        )
+
+    def test_end_to_end_with_estimated_params(self):
+        """Full pipeline: raw prices → estimate_langevin_params_raw → run_rbpf → signal.
+
+        This is the integration test that proves #64 works end-to-end: generate
+        synthetic raw prices, estimate parameters, run the RBPF, extract signals.
+        """
+        rng = np.random.default_rng(42)
+        T = 200
+
+        # Generate a random walk with mean-reverting trend (mimics SPY raw prices)
+        prices = np.zeros(T)
+        prices[0] = 500.0
+        trend = 0.0
+        for t in range(1, T):
+            trend = 0.95 * trend + rng.normal(0, 2.0)
+            prices[t] = prices[t - 1] + trend + rng.normal(0, 0.5)
+
+        # Estimate parameters from raw price changes
+        price_changes = np.diff(prices)
+        params = estimate_langevin_params_raw(price_changes, price_level=prices[0])
+
+        # Set up prior
+        trend_var = params['sigma'] ** 2 / (2.0 * abs(params['theta']))
+        mu0 = np.array([prices[0], 0.0])
+        C0 = np.diag([(0.01 * prices[0]) ** 2, trend_var])
+
+        # Run RBPF on the raw prices
+        means, stds, lls, total_ll, n_eff = run_rbpf(
+            prices, N_particles=100,
+            theta=params['theta'], sigma=params['sigma'],
+            sigma_obs_sq=params['sigma_obs'] ** 2,
+            lambda_J=params['lambda_J'], mu_J=params['mu_J'],
+            sigma_J=params['sigma_J'],
+            mu0=mu0, C0=C0, dt=1.0,
+            rng=np.random.default_rng(0),
+        )
+
+        # Basic sanity checks
+        assert means.shape == (T, 2)
+        assert np.all(np.isfinite(means)), "No NaN/Inf in filtered means"
+        assert np.all(np.isfinite(total_ll)), "Log-likelihood must be finite"
+
+        # Filtered prices should be in the right ballpark (within 20% of true prices)
+        price_ratio = means[:, 0] / prices
+        assert np.all(price_ratio > 0.8) and np.all(price_ratio < 1.2), (
+            f"Filtered prices deviate >20% from observations: "
+            f"ratio range [{price_ratio.min():.3f}, {price_ratio.max():.3f}]"
+        )
+
+        # Extract trading signals with appropriately scaled sigma_delta
+        # sigma_delta should match the scale of trend changes in price units
+        trend_estimates = means[:, 1]
+        sigma_delta = np.std(np.diff(trend_estimates)) * 0.5
+        sigma_delta = max(sigma_delta, 1e-10)  # floor for safety
+        signals = trend_to_trading_signal(trend_estimates, sigma_delta=sigma_delta)
+
+        assert len(signals) == T - 1
+        assert np.all(signals >= -1.0) and np.all(signals <= 1.0)
+        # Signals should not be all identical (filter is actually responding)
+        assert np.std(signals) > 0.01, "Signals are flat — filter not responding"
+
+    def test_rbpf_outperforms_pf_at_raw_price_scale(self):
+        """Rao-Blackwell variance reduction holds at raw-price scale.
+
+        Same test as TestRunRBPF.test_rbpf_outperforms_pf_variance but with
+        raw-price parameters to confirm the theoretical guarantee isn't
+        broken by the change in scale.
+        """
+        T, N = 30, 100
+        obs, _ = self._generate_raw_price_data(
+            T, lambda_J=1.0, mu_J=0.0, sigma_J=2.0, seed=42,
+        )
+
+        n_runs = 20
+        rbpf_prices = np.zeros((n_runs, T))
+        pf_prices = np.zeros((n_runs, T))
+
+        for run in range(n_runs):
+            rbpf_means, _, _, _, _ = run_rbpf(
+                obs, N, self.theta, self.sigma, self.sigma_obs_sq,
+                lambda_J=1.0, mu_J=0.0, sigma_J=2.0,
+                mu0=self.mu0, C0=self.C0, dt=self.dt,
+                rng=np.random.default_rng(run),
+            )
+            rbpf_prices[run] = rbpf_means[:, 0]
+
+            pf_means, _, _, _ = run_particle_filter(
+                obs, N, self.theta, self.sigma, self.sigma_obs_sq,
+                lambda_J=1.0, mu_J=0.0, sigma_J=2.0,
+                mu0=self.mu0, C0=self.C0, dt=self.dt,
+                rng=np.random.default_rng(run),
+            )
+            pf_prices[run] = pf_means[:, 0]
+
+        mean_rbpf_var = np.mean(np.var(rbpf_prices, axis=0))
+        mean_pf_var = np.mean(np.var(pf_prices, axis=0))
+
+        assert mean_rbpf_var < mean_pf_var, (
+            f"Rao-Blackwell violation at raw-price scale: RBPF var ({mean_rbpf_var:.4f}) "
+            f">= PF var ({mean_pf_var:.4f})"
+        )

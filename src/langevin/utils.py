@@ -1,6 +1,11 @@
 """Utility functions bridging RBPF output to trading strategy (Paper §IV-C, §IV-D).
 
-Paper: Christensen, Turner & Godsill (2020), arXiv:2006.08307.
+2020 Paper: Christensen, Turner & Godsill (2020),
+    "Hidden Markov Models Applied To Intraday Momentum Trading",
+    arXiv:2006.08307.
+2012 Paper: Christensen, Murphy & Godsill (2012),
+    "Forecasting High-Frequency Futures Returns Using Online
+    Langevin Dynamics", IEEE JSTSP, vol. 6, no. 7, pp. 727-737.
 """
 
 import numpy as np
@@ -127,6 +132,139 @@ def estimate_langevin_params(
         'lambda_J': lambda_J,
         'mu_J': mu_J,
         'sigma_J': sigma_J,
+    }
+
+
+def estimate_langevin_params_raw(
+    price_changes: NDArray,
+    price_level: float,
+    dt: float = 1.0,
+) -> dict:
+    """Estimate Langevin parameters from raw price differences (2012 Paper §IV-C, Table I).
+
+    The 2012 paper (Christensen, Murphy & Godsill, IEEE JSTSP 2012) defines the
+    state as (raw price, trend) — not (log-price, trend).  Parameters in Table I
+    are "scale factors" (SF) expressed as fractions of the initial price level P_0.
+
+    Estimation steps (method-of-moments heuristics on raw price changes ΔP_t):
+
+        1. theta (mean-reversion rate, dimensionless):
+             phi = Cov(ΔP_t, ΔP_{t-1}) / Var(ΔP_t)   (lag-1 autocorrelation)
+             theta = log(phi) / dt                      (OU decay rate)
+           Clamped to theta <= -0.01/dt for stability.
+
+        2. sigma (diffusion coefficient, price units):
+             sigma = std(ΔP) * sqrt(2 * |theta|)
+           From the OU stationary variance: Var[x2] = sigma^2 / (2|theta|),
+           so sigma = sqrt(2|theta|) * sqrt(Var[x2]) ≈ sqrt(2|theta|) * std(ΔP).
+
+        3. sigma_obs (observation noise, price units):
+             sigma_obs = 0.1 * std(ΔP)
+
+        4. lambda_J (jump intensity, per unit time):
+             kurtosis_excess = E[(ΔP - mean)^4] / std(ΔP)^4 - 3
+             lambda_J = min(kurtosis_excess / (3 * dt), 10 / dt)
+           Excess kurtosis > 0 indicates jump activity.
+
+        5. mu_J = 0 (symmetric jumps by default).
+
+        6. sigma_J (jump size std, price units):
+             jump_var_fraction = min(kurtosis / (kurtosis + 3), 0.5)
+             sigma_J = sqrt(jump_var_fraction * std(ΔP)^2 / (lambda_J * dt))
+           Decomposes total variance into diffusion + jump contributions.
+
+    Scale factors for Table I comparison:
+        SF(x) = x / P_0
+
+    Parameters
+    ----------
+    price_changes : np.ndarray, shape (T,)
+        Raw price differences ΔP_t = P_t - P_{t-1}. Must have T >= 3.
+    price_level : float
+        Initial price level P_0 for computing scale factors. Must be > 0.
+    dt : float
+        Timestep in appropriate units (e.g. 1.0 for daily). Must be > 0.
+
+    Returns
+    -------
+    params : dict with keys
+        'theta'     : float — mean-reversion parameter (< 0)
+        'sigma'     : float — diffusion coefficient in price units (> 0)
+        'sigma_obs' : float — observation noise std in price units (> 0)
+        'lambda_J'  : float — jump intensity per unit time (>= 0)
+        'mu_J'      : float — mean jump size in price units
+        'sigma_J'   : float — jump size std in price units (>= 0)
+        'scale_factors' : dict — SF values relative to price_level for
+                          comparison with Table I ('sigma', 'sigma_obs', 'sigma_J')
+    """
+    if dt <= 0:
+        raise ValueError(f"dt must be > 0, got {dt}")
+    if price_level <= 0:
+        raise ValueError(f"price_level must be > 0, got {price_level}")
+    price_changes = np.asarray(price_changes, dtype=float)
+    if len(price_changes) < 3:
+        raise ValueError(f"Need at least 3 price changes, got {len(price_changes)}")
+
+    T = len(price_changes)
+    change_std = np.std(price_changes)
+
+    # Floor to avoid zero sigma/sigma_obs
+    change_std = max(change_std, 1e-10)
+
+    # --- theta from AR(1) on price changes ---
+    changes_centered = price_changes - np.mean(price_changes)
+    autocov_0 = np.sum(changes_centered**2) / T
+    autocov_1 = np.sum(changes_centered[:-1] * changes_centered[1:]) / T
+
+    if autocov_0 > 0 and autocov_1 / autocov_0 > 0:
+        phi = autocov_1 / autocov_0
+        phi = min(phi, 1.0 - 1e-9)
+        theta = np.log(phi) / dt
+    else:
+        theta = -0.5 / dt
+
+    theta = min(theta, -0.01 / dt)
+
+    # --- sigma from residual volatility (in price units) ---
+    sigma = change_std * np.sqrt(2.0 * abs(theta))
+
+    # --- sigma_obs: observation noise as fraction of price change volatility ---
+    sigma_obs = 0.1 * change_std
+
+    # --- Jump parameters from tail behavior ---
+    if change_std > 0:
+        kurtosis = np.mean(changes_centered**4) / change_std**4 - 3.0
+    else:
+        kurtosis = 0.0
+
+    if kurtosis > 0:
+        lambda_J = min(kurtosis / (3.0 * dt), 10.0 / dt)
+    else:
+        lambda_J = 0.0
+
+    mu_J = 0.0
+
+    if lambda_J > 0:
+        jump_var_fraction = min(kurtosis / (kurtosis + 3.0), 0.5)
+        sigma_J = np.sqrt(jump_var_fraction * change_std**2 / (lambda_J * dt))
+    else:
+        sigma_J = 0.0
+
+    # Scale factors relative to initial price (for comparison with Table I)
+    scale_factors = {
+        'sigma': sigma / price_level,
+        'sigma_obs': sigma_obs / price_level,
+        'sigma_J': sigma_J / price_level if sigma_J > 0 else 0.0,
+    }
+
+    return {
+        'theta': theta,
+        'sigma': sigma,
+        'sigma_obs': sigma_obs,
+        'lambda_J': lambda_J,
+        'mu_J': mu_J,
+        'sigma_J': sigma_J,
+        'scale_factors': scale_factors,
     }
 
 

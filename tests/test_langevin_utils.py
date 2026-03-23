@@ -3,7 +3,11 @@
 import numpy as np
 import pytest
 
-from src.langevin.utils import estimate_langevin_params, trend_to_trading_signal
+from src.langevin.utils import (
+    estimate_langevin_params,
+    estimate_langevin_params_raw,
+    trend_to_trading_signal,
+)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -118,6 +122,152 @@ class TestEstimateLangevinParams:
         assert params['sigma'] > 0, "sigma must be positive even for constant returns"
         assert params['sigma_obs'] > 0, "sigma_obs must be positive even for constant returns"
         assert params['lambda_J'] >= 0
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Tests for estimate_langevin_params_raw
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestEstimateLangevinParamsRaw:
+    """Tests for estimate_langevin_params_raw."""
+
+    def test_returns_valid_ranges(self):
+        """All estimated parameters fall in physically valid ranges."""
+        rng = np.random.default_rng(42)
+        # Simulate daily price changes for SPY (~$500, daily std ~$5)
+        price_changes = rng.normal(0.05, 5.0, size=500)
+
+        params = estimate_langevin_params_raw(price_changes, price_level=500.0, dt=1.0)
+
+        assert params['theta'] < 0, f"theta must be < 0, got {params['theta']}"
+        assert params['sigma'] > 0, f"sigma must be > 0, got {params['sigma']}"
+        assert params['sigma_obs'] > 0, f"sigma_obs must be > 0, got {params['sigma_obs']}"
+        assert params['lambda_J'] >= 0, f"lambda_J must be >= 0, got {params['lambda_J']}"
+        assert params['sigma_J'] >= 0, f"sigma_J must be >= 0, got {params['sigma_J']}"
+
+    def test_returns_all_required_keys(self):
+        """Output dict contains all required keys including scale_factors."""
+        rng = np.random.default_rng(0)
+        price_changes = rng.normal(0, 5.0, size=100)
+        params = estimate_langevin_params_raw(price_changes, price_level=500.0)
+
+        required_keys = {'theta', 'sigma', 'sigma_obs', 'lambda_J', 'mu_J', 'sigma_J',
+                         'scale_factors'}
+        assert set(params.keys()) == required_keys
+
+        sf_keys = {'sigma', 'sigma_obs', 'sigma_J'}
+        assert set(params['scale_factors'].keys()) == sf_keys
+
+    def test_scale_factors_are_fractions_of_price(self):
+        """Scale factors = param / price_level, so SF(sigma) * price_level == sigma."""
+        rng = np.random.default_rng(42)
+        price_level = 500.0
+        price_changes = rng.normal(0, 5.0, size=500)
+        params = estimate_langevin_params_raw(price_changes, price_level=price_level)
+
+        sf = params['scale_factors']
+        # SF = param / price_level, then SF * price_level round-trips with at most
+        # 2 ULPs of floating-point error from one division and one multiplication.
+        eps = 2 * np.finfo(float).eps
+        np.testing.assert_allclose(sf['sigma'] * price_level, params['sigma'], rtol=eps)
+        np.testing.assert_allclose(sf['sigma_obs'] * price_level, params['sigma_obs'], rtol=eps)
+        if params['sigma_J'] > 0:
+            np.testing.assert_allclose(sf['sigma_J'] * price_level, params['sigma_J'], rtol=eps)
+
+    def test_consistent_with_log_return_version(self):
+        """When price_changes = log_returns * price_level (exact scalar multiplication),
+        theta is identical and sigma scales by price_level exactly."""
+        rng = np.random.default_rng(42)
+        price_level = 500.0
+        # Exact scalar multiplication: ΔP = r * P_0 (not an approximation here,
+        # since we're constructing the inputs, not converting real prices)
+        log_returns = rng.normal(0.0005, 0.01, size=500)
+        price_changes = log_returns * price_level
+
+        params_log = estimate_langevin_params(log_returns, dt=1.0)
+        params_raw = estimate_langevin_params_raw(price_changes, price_level=price_level, dt=1.0)
+
+        # theta is identical: autocorrelation phi = Cov/Var, and scalar multiplication
+        # cancels in the ratio (price_level^2 in both numerator and denominator).
+        # Only floating-point rounding differs.
+        np.testing.assert_allclose(
+            params_raw['theta'], params_log['theta'],
+            rtol=10 * np.finfo(float).eps,
+        )
+
+        # sigma_raw = change_std * sqrt(2|theta|), change_std = ret_std * price_level,
+        # so sigma_raw / sigma_log = price_level exactly (up to float rounding).
+        ratio = params_raw['sigma'] / params_log['sigma']
+        np.testing.assert_allclose(ratio, price_level, rtol=1e-12)
+
+    def test_higher_volatility_gives_larger_sigma(self):
+        """More volatile price changes produce larger sigma estimate."""
+        rng = np.random.default_rng(42)
+        calm = rng.normal(0, 2.0, size=500)
+        volatile = rng.normal(0, 20.0, size=500)
+
+        calm_params = estimate_langevin_params_raw(calm, price_level=500.0)
+        volatile_params = estimate_langevin_params_raw(volatile, price_level=500.0)
+
+        assert volatile_params['sigma'] > calm_params['sigma']
+
+    def test_fat_tailed_gives_positive_lambda_J(self):
+        """Price changes with excess kurtosis should produce lambda_J > 0."""
+        rng = np.random.default_rng(42)
+        base = rng.normal(0, 5.0, size=500)
+        jumps = np.zeros(500)
+        jump_idx = rng.choice(500, size=20, replace=False)
+        jumps[jump_idx] = rng.normal(0, 25.0, size=20)
+        fat_tailed = base + jumps
+
+        params = estimate_langevin_params_raw(fat_tailed, price_level=500.0)
+        assert params['lambda_J'] > 0, "Fat-tailed price changes should have lambda_J > 0"
+
+    def test_mu_J_is_zero(self):
+        """mu_J defaults to 0 (symmetric jumps)."""
+        price_changes = np.random.default_rng(0).normal(0, 5.0, size=100)
+        params = estimate_langevin_params_raw(price_changes, price_level=500.0)
+        assert params['mu_J'] == 0.0
+
+    def test_invalid_dt_zero(self):
+        """dt = 0 raises ValueError."""
+        with pytest.raises(ValueError, match="dt must be > 0"):
+            estimate_langevin_params_raw(np.array([1.0, -2.0, 3.0]), price_level=500.0, dt=0.0)
+
+    def test_invalid_dt_negative(self):
+        """dt < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="dt must be > 0"):
+            estimate_langevin_params_raw(np.array([1.0, -2.0, 3.0]), price_level=500.0, dt=-1.0)
+
+    def test_invalid_price_level_zero(self):
+        """price_level = 0 raises ValueError."""
+        with pytest.raises(ValueError, match="price_level must be > 0"):
+            estimate_langevin_params_raw(np.array([1.0, -2.0, 3.0]), price_level=0.0)
+
+    def test_invalid_price_level_negative(self):
+        """price_level < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="price_level must be > 0"):
+            estimate_langevin_params_raw(np.array([1.0, -2.0, 3.0]), price_level=-100.0)
+
+    def test_invalid_too_few_changes(self):
+        """Fewer than 3 price changes raises ValueError."""
+        with pytest.raises(ValueError, match="Need at least 3 price changes"):
+            estimate_langevin_params_raw(np.array([1.0, -2.0]), price_level=500.0)
+
+    def test_minimum_changes(self):
+        """Exactly 3 price changes works without error."""
+        params = estimate_langevin_params_raw(np.array([1.0, -2.0, 3.0]), price_level=500.0)
+        assert params['theta'] < 0
+
+    def test_constant_changes(self):
+        """Constant price changes (zero variance) produce valid output."""
+        params = estimate_langevin_params_raw(
+            np.array([1.0, 1.0, 1.0, 1.0]), price_level=500.0
+        )
+        assert params['theta'] < 0
+        assert params['sigma'] > 0
+        assert params['sigma_obs'] > 0
 
 
 # ──────────────────────────────────────────────────────────────────────
