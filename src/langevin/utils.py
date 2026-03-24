@@ -317,3 +317,152 @@ def trend_to_trading_signal(
     signals = delta / np.sqrt(delta**2 + sigma_delta**2)
 
     return signals
+
+
+def fir_momentum_signal(
+    trend_estimates: NDArray,
+    n_taps: int = 4,
+) -> NDArray:
+    """FIR-smoothed momentum direction signal (2012 Paper §IV-D, Steps 1-2).
+
+    The 2012 paper's signal pipeline starts by converting the RBPF-filtered
+    trend into a persistence-of-direction indicator via two steps:
+
+        Step 1 — Binary direction:
+            b_t = sign(x2_t)                  (is the trend up or down?)
+
+        Step 2 — Uniform FIR moving average:
+            M_t = (1/n) * sum_{j=0}^{n-1} b_{t-j}
+
+    where n = n_taps (paper uses n=4).  The output M_t measures the fraction
+    of the last n periods where momentum was positive:
+
+        M_t = +1.0 → all n periods uptrend   (strong long)
+        M_t = +0.5 → 3 of 4 periods up       (moderate long)
+        M_t =  0.0 → equal up/down           (no signal)
+        M_t = -0.5 → 3 of 4 periods down     (moderate short)
+        M_t = -1.0 → all n periods downtrend  (strong short)
+
+    This is the key turnover reducer: a single noisy trend reversal lasting
+    one step only moves M_t by 1/n (= 0.25 for n=4), rather than causing
+    a full position flip.
+
+    Note: uses sign(x2_t) (trend level, 1st derivative of price), NOT
+    sign(Δx2_t) (trend change, 2nd derivative).  The trend must cross zero
+    to flip the binary signal — not just slow down.
+
+    Alignment note: output has length T - n_taps + 1 (the FIR warmup
+    consumes the first n_taps - 1 elements).  Prepend n_taps - 1 zeros
+    when aligning with the original price series for backtesting.
+
+    Parameters
+    ----------
+    trend_estimates : np.ndarray, shape (T,)
+        RBPF-filtered trend component x2_t at each timestep.
+    n_taps : int
+        Number of FIR taps (moving average window). Must be >= 1.
+        Paper uses n_taps=4. n_taps=1 reduces to sign(x2_t).
+
+    Returns
+    -------
+    momentum : np.ndarray, shape (T - n_taps + 1,)
+        FIR-smoothed momentum indicator M_t ∈ [-1, 1].
+    """
+    if n_taps < 1:
+        raise ValueError(f"n_taps must be >= 1, got {n_taps}")
+    trend_estimates = np.asarray(trend_estimates, dtype=float)
+    if len(trend_estimates) < n_taps:
+        raise ValueError(
+            f"Need at least n_taps={n_taps} trend estimates, got {len(trend_estimates)}"
+        )
+
+    # Step 1: binary direction signal
+    b = np.sign(trend_estimates)  # shape (T,), values in {-1, 0, +1}
+
+    # Step 2: uniform FIR moving average (n-tap box filter)
+    # Use cumsum for O(T) computation instead of convolution
+    cumsum = np.cumsum(b)
+    # M_t = (cumsum[t] - cumsum[t - n_taps]) / n_taps for t >= n_taps - 1
+    momentum = np.empty(len(trend_estimates) - n_taps + 1)
+    momentum[0] = cumsum[n_taps - 1] / n_taps
+    momentum[1:] = (cumsum[n_taps:] - cumsum[:-n_taps]) / n_taps
+
+    return momentum
+
+
+def igarch_volatility_scale(
+    signals: NDArray,
+    returns: NDArray,
+    alpha: float = 0.06,
+    sigma2_init: float | None = None,
+) -> NDArray:
+    """IGARCH(1,1) volatility scaling of trading signals (2012 Paper §IV-D, Step 4).
+
+    Normalizes position sizes by a time-varying volatility estimate so that
+    risk contribution is approximately constant over time.  The integrated
+    GARCH(1,1) model (IGARCH) is:
+
+        sigma2_t = alpha * r_{t-1}^2 + (1 - alpha) * sigma2_{t-1}
+
+    where r_{t-1} is the previous observed return and the constraint
+    alpha + beta = 1 makes the variance a unit-root process (no mean
+    reversion).  This is appropriate for financial volatility which is
+    highly persistent (RiskMetrics model uses alpha ≈ 0.06).
+
+    The volatility-scaled position is:
+
+        position_t = signal_t / sqrt(sigma2_t)
+
+    For the multi-contract case (2012 paper, 75 futures), this normalizes
+    signals across contracts with different volatility levels.  For single-
+    contract (SPY), it reduces to a time-varying position sizer that shrinks
+    during volatile periods.
+
+    Parameters
+    ----------
+    signals : np.ndarray, shape (T,)
+        Raw trading signals (e.g. from the transfer function applied to FIR output).
+    returns : np.ndarray, shape (T,)
+        Observed returns r_t for volatility estimation.  Must have same length
+        as signals.
+    alpha : float
+        IGARCH weight on the squared return innovation.  Must be in (0, 1).
+        Default 0.06 (RiskMetrics convention).
+    sigma2_init : float or None
+        Initial variance estimate sigma2_0.  If None, uses np.var(returns)
+        as a full-sample fallback.  Must be > 0 if provided.
+
+    Returns
+    -------
+    positions : np.ndarray, shape (T,)
+        Volatility-scaled positions.  The scale depends on the input signal
+        scale and the volatility level.
+    """
+    if not (0.0 < alpha < 1.0):
+        raise ValueError(f"alpha must be in (0, 1), got {alpha}")
+    signals = np.asarray(signals, dtype=float)
+    returns = np.asarray(returns, dtype=float)
+    if len(signals) != len(returns):
+        raise ValueError(
+            f"signals and returns must have same length, got {len(signals)} and {len(returns)}"
+        )
+    if len(signals) == 0:
+        raise ValueError("signals and returns must be non-empty")
+
+    if sigma2_init is None:
+        sigma2_init = np.var(returns)
+        # Floor to avoid division by zero if returns are constant
+        sigma2_init = max(sigma2_init, 1e-20)
+    if sigma2_init <= 0:
+        raise ValueError(f"sigma2_init must be > 0, got {sigma2_init}")
+
+    T = len(signals)
+    positions = np.empty(T)
+    sigma2 = sigma2_init
+
+    for t in range(T):
+        positions[t] = signals[t] / np.sqrt(sigma2)
+        # Update variance for next step using current return
+        sigma2 = alpha * returns[t] ** 2 + (1.0 - alpha) * sigma2
+
+    return positions

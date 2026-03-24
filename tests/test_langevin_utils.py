@@ -6,6 +6,8 @@ import pytest
 from src.langevin.utils import (
     estimate_langevin_params,
     estimate_langevin_params_raw,
+    fir_momentum_signal,
+    igarch_volatility_scale,
     trend_to_trading_signal,
 )
 
@@ -369,3 +371,282 @@ class TestTrendToTradingSignal:
         """Exactly 2 trend estimates works, producing 1 signal."""
         signals = trend_to_trading_signal(np.array([0.0, 1.0]), sigma_delta=0.5)
         assert len(signals) == 1
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Tests for fir_momentum_signal
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestFirMomentumSignal:
+    """Tests for fir_momentum_signal (2012 Paper §IV-D, Steps 1-2)."""
+
+    def test_all_positive_trend_gives_plus_one(self):
+        """When trend is positive for all n_taps, M_t = +1.0 exactly."""
+        # All positive trends → sign = +1 → moving average = +1
+        trends = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        momentum = fir_momentum_signal(trends, n_taps=4)
+        np.testing.assert_array_equal(momentum, 1.0)
+
+    def test_all_negative_trend_gives_minus_one(self):
+        """When trend is negative for all n_taps, M_t = -1.0 exactly."""
+        trends = np.array([-1.0, -2.0, -3.0, -4.0, -5.0])
+        momentum = fir_momentum_signal(trends, n_taps=4)
+        np.testing.assert_array_equal(momentum, -1.0)
+
+    def test_alternating_gives_zero(self):
+        """Alternating positive/negative trends → M_t = 0.0 (no net direction)."""
+        # +1, -1, +1, -1 → signs sum to 0
+        trends = np.array([1.0, -1.0, 1.0, -1.0])
+        momentum = fir_momentum_signal(trends, n_taps=4)
+        np.testing.assert_array_equal(momentum, [0.0])
+
+    def test_known_discrete_levels(self):
+        """FIR output takes only values in {-1, -0.5, 0, 0.5, 1} for n_taps=4."""
+        # Design a sequence that hits all 5 levels
+        # signs: [+1, +1, +1, +1, +1, -1, -1, -1, -1]
+        trends = np.array([1.0, 2.0, 3.0, 4.0, 5.0, -1.0, -2.0, -3.0, -4.0])
+        momentum = fir_momentum_signal(trends, n_taps=4)
+        # Window positions:
+        # [+1,+1,+1,+1] → 1.0
+        # [+1,+1,+1,+1] → 1.0
+        # [+1,+1,+1,-1] → 0.5
+        # [+1,+1,-1,-1] → 0.0
+        # [+1,-1,-1,-1] → -0.5
+        # [-1,-1,-1,-1] → -1.0
+        expected = np.array([1.0, 1.0, 0.5, 0.0, -0.5, -1.0])
+        np.testing.assert_array_equal(momentum, expected)
+
+    def test_output_bounded(self):
+        """Output is always in [-1, 1]."""
+        rng = np.random.default_rng(42)
+        trends = np.cumsum(rng.normal(0, 1.0, size=200))
+        momentum = fir_momentum_signal(trends, n_taps=4)
+        assert np.all(momentum >= -1.0), f"Below -1: {momentum.min()}"
+        assert np.all(momentum <= 1.0), f"Above 1: {momentum.max()}"
+
+    def test_output_length(self):
+        """Output has length T - n_taps + 1."""
+        T = 50
+        for n_taps in [1, 2, 4, 10]:
+            trends = np.ones(T)
+            momentum = fir_momentum_signal(trends, n_taps=n_taps)
+            assert len(momentum) == T - n_taps + 1, (
+                f"n_taps={n_taps}: expected {T - n_taps + 1}, got {len(momentum)}"
+            )
+
+    def test_n_taps_1_is_sign(self):
+        """n_taps=1 reduces to sign(x2_t) — no smoothing."""
+        trends = np.array([3.0, -2.0, 0.5, -0.1, 0.0, 7.0])
+        momentum = fir_momentum_signal(trends, n_taps=1)
+        expected = np.sign(trends)
+        np.testing.assert_array_equal(momentum, expected)
+
+    def test_zero_trend_gives_zero_sign(self):
+        """Trend exactly zero → sign(0) = 0 → contributes 0 to average."""
+        # [+1, 0, +1, 0] → average = 0.5
+        trends = np.array([1.0, 0.0, 1.0, 0.0])
+        momentum = fir_momentum_signal(trends, n_taps=4)
+        np.testing.assert_array_equal(momentum, [0.5])
+
+    def test_symmetry(self):
+        """Negating all trends negates the output: fir(-x) = -fir(x)."""
+        trends = np.array([1.0, -2.0, 3.0, -0.5, 4.0, -1.0])
+        m_pos = fir_momentum_signal(trends, n_taps=4)
+        m_neg = fir_momentum_signal(-trends, n_taps=4)
+        np.testing.assert_array_equal(m_pos, -m_neg)
+
+    def test_minimum_input_length(self):
+        """Exactly n_taps elements → 1 output."""
+        trends = np.array([1.0, 2.0, 3.0, 4.0])
+        momentum = fir_momentum_signal(trends, n_taps=4)
+        assert len(momentum) == 1
+        np.testing.assert_array_equal(momentum, [1.0])
+
+    def test_invalid_n_taps_zero(self):
+        """n_taps=0 raises ValueError."""
+        with pytest.raises(ValueError, match="n_taps must be >= 1"):
+            fir_momentum_signal(np.array([1.0, 2.0]), n_taps=0)
+
+    def test_invalid_n_taps_negative(self):
+        """n_taps<0 raises ValueError."""
+        with pytest.raises(ValueError, match="n_taps must be >= 1"):
+            fir_momentum_signal(np.array([1.0, 2.0]), n_taps=-1)
+
+    def test_invalid_too_few_estimates(self):
+        """Fewer than n_taps estimates raises ValueError."""
+        with pytest.raises(ValueError, match="Need at least n_taps=4"):
+            fir_momentum_signal(np.array([1.0, 2.0, 3.0]), n_taps=4)
+
+    def test_large_n_taps_smooths_more(self):
+        """Larger n_taps produces smoother (less variable) output."""
+        rng = np.random.default_rng(42)
+        trends = np.cumsum(rng.normal(0, 1.0, size=200))
+
+        m_short = fir_momentum_signal(trends, n_taps=2)
+        m_long = fir_momentum_signal(trends, n_taps=8)
+
+        # Longer window → fewer transitions → lower std of the signal
+        assert np.std(np.diff(m_long)) < np.std(np.diff(m_short))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Tests for igarch_volatility_scale
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestIgarchVolatilityScale:
+    """Tests for igarch_volatility_scale (2012 Paper §IV-D, Step 4)."""
+
+    def test_constant_volatility_scales_uniformly(self):
+        """With constant returns, sigma2 stays constant → uniform scaling."""
+        T = 50
+        signals = np.ones(T)
+        # Constant returns → sigma2_t = alpha * r^2 + (1-alpha) * sigma2
+        # converges to r^2 (fixed point of IGARCH with constant input)
+        returns = np.full(T, 0.01)
+        positions = igarch_volatility_scale(signals, returns, alpha=0.06,
+                                            sigma2_init=0.01**2)
+
+        # After convergence, all positions should be approximately equal
+        # Check last 10 are nearly identical
+        np.testing.assert_allclose(positions[-10:], positions[-1], rtol=1e-3)
+
+    def test_higher_vol_shrinks_position(self):
+        """Periods of higher volatility should produce smaller position sizes."""
+        T = 100
+        signals = np.ones(T)
+        returns = np.zeros(T)
+        # Low vol period then high vol period
+        returns[:50] = 0.005
+        returns[50:] = 0.05  # 10x larger returns
+
+        positions = igarch_volatility_scale(signals, returns, alpha=0.2,
+                                            sigma2_init=0.005**2)
+
+        # Average position size should be smaller in the high-vol period
+        # (with lag due to IGARCH adaptation)
+        avg_low_vol = np.mean(np.abs(positions[10:50]))  # skip warmup
+        avg_high_vol = np.mean(np.abs(positions[60:]))   # skip transition
+        assert avg_high_vol < avg_low_vol, (
+            f"High-vol positions ({avg_high_vol:.4f}) should be smaller than "
+            f"low-vol positions ({avg_low_vol:.4f})"
+        )
+
+    def test_zero_signal_gives_zero_position(self):
+        """Zero signals → zero positions regardless of volatility."""
+        T = 20
+        signals = np.zeros(T)
+        returns = np.random.default_rng(42).normal(0, 0.01, size=T)
+        positions = igarch_volatility_scale(signals, returns)
+        np.testing.assert_array_equal(positions, 0.0)
+
+    def test_output_length_matches_input(self):
+        """Output has same length as input signals."""
+        T = 30
+        signals = np.ones(T)
+        returns = np.random.default_rng(0).normal(0, 0.01, size=T)
+        positions = igarch_volatility_scale(signals, returns)
+        assert len(positions) == T
+
+    def test_output_sign_matches_signal(self):
+        """Position sign matches signal sign (vol scaling is always positive)."""
+        T = 50
+        rng = np.random.default_rng(42)
+        signals = rng.choice([-1.0, 0.0, 1.0], size=T)
+        returns = rng.normal(0, 0.01, size=T)
+        positions = igarch_volatility_scale(signals, returns)
+
+        for t in range(T):
+            if signals[t] > 0:
+                assert positions[t] > 0, f"t={t}: positive signal but negative position"
+            elif signals[t] < 0:
+                assert positions[t] < 0, f"t={t}: negative signal but positive position"
+            else:
+                assert positions[t] == 0.0, f"t={t}: zero signal but nonzero position"
+
+    def test_igarch_recursion_manual(self):
+        """Verify the IGARCH recursion step-by-step on a tiny example."""
+        alpha = 0.25
+        sigma2_init = 0.04  # initial variance
+        signals = np.array([1.0, 1.0, 1.0])
+        returns = np.array([0.1, -0.2, 0.05])
+
+        positions = igarch_volatility_scale(signals, returns, alpha=alpha,
+                                            sigma2_init=sigma2_init)
+
+        # t=0: position = 1.0 / sqrt(0.04) = 5.0
+        # sigma2_1 = 0.25 * 0.1^2 + 0.75 * 0.04 = 0.0025 + 0.03 = 0.0325
+        # t=1: position = 1.0 / sqrt(0.0325)
+        # sigma2_2 = 0.25 * 0.04 + 0.75 * 0.0325 = 0.01 + 0.024375 = 0.034375
+        # t=2: position = 1.0 / sqrt(0.034375)
+        s0 = sigma2_init
+        np.testing.assert_allclose(positions[0], 1.0 / np.sqrt(s0))
+        s1 = alpha * returns[0]**2 + (1 - alpha) * s0
+        np.testing.assert_allclose(positions[1], 1.0 / np.sqrt(s1))
+        s2 = alpha * returns[1]**2 + (1 - alpha) * s1
+        np.testing.assert_allclose(positions[2], 1.0 / np.sqrt(s2))
+
+    def test_alpha_1_uses_only_last_return(self):
+        """alpha → 1 means sigma2_t ≈ r_{t-1}^2 (instantaneous variance)."""
+        # alpha=0.99 (not exactly 1.0 which is excluded)
+        alpha = 0.99
+        signals = np.array([1.0, 1.0, 1.0])
+        returns = np.array([0.1, 0.2, 0.05])
+        sigma2_init = 0.01
+
+        positions = igarch_volatility_scale(signals, returns, alpha=alpha,
+                                            sigma2_init=sigma2_init)
+
+        # After t=0, sigma2_1 ≈ 0.99 * 0.1^2 + 0.01 * 0.01 ≈ 0.0099 + 0.0001 = 0.01
+        # position[1] ≈ 1/sqrt(0.01) = 10.0
+        s1 = alpha * returns[0]**2 + (1 - alpha) * sigma2_init
+        np.testing.assert_allclose(positions[1], 1.0 / np.sqrt(s1), rtol=1e-10)
+
+    def test_sigma2_init_none_uses_sample_variance(self):
+        """When sigma2_init is None, uses np.var(returns) as initial estimate."""
+        T = 50
+        rng = np.random.default_rng(42)
+        returns = rng.normal(0, 0.02, size=T)
+        signals = np.ones(T)
+
+        positions = igarch_volatility_scale(signals, returns, sigma2_init=None)
+
+        # First position should use np.var(returns) as the variance
+        expected_s0 = np.var(returns)
+        np.testing.assert_allclose(positions[0], 1.0 / np.sqrt(expected_s0), rtol=1e-10)
+
+    def test_invalid_alpha_zero(self):
+        """alpha=0 raises ValueError."""
+        with pytest.raises(ValueError, match="alpha must be in"):
+            igarch_volatility_scale(np.ones(5), np.ones(5), alpha=0.0)
+
+    def test_invalid_alpha_one(self):
+        """alpha=1 raises ValueError."""
+        with pytest.raises(ValueError, match="alpha must be in"):
+            igarch_volatility_scale(np.ones(5), np.ones(5), alpha=1.0)
+
+    def test_invalid_alpha_negative(self):
+        """alpha<0 raises ValueError."""
+        with pytest.raises(ValueError, match="alpha must be in"):
+            igarch_volatility_scale(np.ones(5), np.ones(5), alpha=-0.1)
+
+    def test_invalid_length_mismatch(self):
+        """Different length signals and returns raises ValueError."""
+        with pytest.raises(ValueError, match="same length"):
+            igarch_volatility_scale(np.ones(5), np.ones(10))
+
+    def test_invalid_empty(self):
+        """Empty arrays raise ValueError."""
+        with pytest.raises(ValueError, match="non-empty"):
+            igarch_volatility_scale(np.array([]), np.array([]))
+
+    def test_invalid_sigma2_init_zero(self):
+        """sigma2_init=0 raises ValueError."""
+        with pytest.raises(ValueError, match="sigma2_init must be > 0"):
+            igarch_volatility_scale(np.ones(5), np.ones(5), sigma2_init=0.0)
+
+    def test_invalid_sigma2_init_negative(self):
+        """sigma2_init<0 raises ValueError."""
+        with pytest.raises(ValueError, match="sigma2_init must be > 0"):
+            igarch_volatility_scale(np.ones(5), np.ones(5), sigma2_init=-1.0)
