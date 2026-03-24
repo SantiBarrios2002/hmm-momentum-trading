@@ -317,10 +317,14 @@ class TestTrendToTradingSignal:
 
     def test_large_delta_approaches_one(self):
         """Very large trend change → signal approaches ±1."""
-        trends = np.array([0.0, 1000.0])  # huge positive change
-        signals = trend_to_trading_signal(trends, sigma_delta=0.01)
-        # delta / sqrt(delta^2 + sigma_delta^2) ≈ 1 for large delta
-        np.testing.assert_allclose(signals[0], 1.0, atol=1e-8)
+        delta = 1000.0
+        sigma_delta = 0.01
+        trends = np.array([0.0, delta])
+        signals = trend_to_trading_signal(trends, sigma_delta=sigma_delta)
+        # Deviation from 1: 1 - delta/sqrt(delta^2 + sd^2) ≈ sd^2 / (2*delta^2)
+        # = 0.01^2 / (2*1000^2) = 5e-11. Allow 10x margin.
+        expected_atol = sigma_delta**2 / (2 * delta**2) * 10
+        np.testing.assert_allclose(signals[0], 1.0, atol=expected_atol)
 
     def test_small_delta_is_linear(self):
         """For small delta << sigma_delta, signal ≈ delta / sigma_delta (linear regime)."""
@@ -580,12 +584,20 @@ class TestIgarchVolatilityScale:
         # t=1: position = 1.0 / sqrt(0.0325)
         # sigma2_2 = 0.25 * 0.04 + 0.75 * 0.0325 = 0.01 + 0.024375 = 0.034375
         # t=2: position = 1.0 / sqrt(0.034375)
+        # Both sides compute 1/sqrt(x) from identical float64 values.
+        # Error is at most ~2 ULPs of the result.
         s0 = sigma2_init
-        np.testing.assert_allclose(positions[0], 1.0 / np.sqrt(s0))
+        expected_0 = 1.0 / np.sqrt(s0)
+        np.testing.assert_allclose(positions[0], expected_0,
+                                   atol=2 * np.finfo(float).eps * expected_0)
         s1 = alpha * returns[0]**2 + (1 - alpha) * s0
-        np.testing.assert_allclose(positions[1], 1.0 / np.sqrt(s1))
+        expected_1 = 1.0 / np.sqrt(s1)
+        np.testing.assert_allclose(positions[1], expected_1,
+                                   atol=2 * np.finfo(float).eps * expected_1)
         s2 = alpha * returns[1]**2 + (1 - alpha) * s1
-        np.testing.assert_allclose(positions[2], 1.0 / np.sqrt(s2))
+        expected_2 = 1.0 / np.sqrt(s2)
+        np.testing.assert_allclose(positions[2], expected_2,
+                                   atol=2 * np.finfo(float).eps * expected_2)
 
     def test_alpha_1_uses_only_last_return(self):
         """alpha → 1 means sigma2_t ≈ r_{t-1}^2 (instantaneous variance)."""
@@ -603,8 +615,8 @@ class TestIgarchVolatilityScale:
         s1 = alpha * returns[0]**2 + (1 - alpha) * sigma2_init
         np.testing.assert_allclose(positions[1], 1.0 / np.sqrt(s1), rtol=1e-10)
 
-    def test_sigma2_init_none_uses_sample_variance(self):
-        """When sigma2_init is None, uses np.var(returns) as initial estimate."""
+    def test_sigma2_init_none_uses_first_return_squared(self):
+        """When sigma2_init is None, uses returns[0]^2 as causal initial estimate."""
         T = 50
         rng = np.random.default_rng(42)
         returns = rng.normal(0, 0.02, size=T)
@@ -612,9 +624,11 @@ class TestIgarchVolatilityScale:
 
         positions = igarch_volatility_scale(signals, returns, sigma2_init=None)
 
-        # First position should use np.var(returns) as the variance
-        expected_s0 = np.var(returns)
-        np.testing.assert_allclose(positions[0], 1.0 / np.sqrt(expected_s0), rtol=1e-10)
+        # First position uses returns[0]^2 as the variance (causal, no lookahead)
+        expected_s0 = returns[0] ** 2
+        # Both sides compute 1/sqrt(x) from identical float64 — error is ~2 ULPs
+        atol = 2 * np.finfo(float).eps * (1.0 / np.sqrt(expected_s0))
+        np.testing.assert_allclose(positions[0], 1.0 / np.sqrt(expected_s0), atol=atol)
 
     def test_invalid_alpha_zero(self):
         """alpha=0 raises ValueError."""
@@ -643,10 +657,26 @@ class TestIgarchVolatilityScale:
 
     def test_invalid_sigma2_init_zero(self):
         """sigma2_init=0 raises ValueError."""
-        with pytest.raises(ValueError, match="sigma2_init must be > 0"):
+        with pytest.raises(ValueError, match="sigma2_init must be"):
             igarch_volatility_scale(np.ones(5), np.ones(5), sigma2_init=0.0)
 
     def test_invalid_sigma2_init_negative(self):
         """sigma2_init<0 raises ValueError."""
-        with pytest.raises(ValueError, match="sigma2_init must be > 0"):
+        with pytest.raises(ValueError, match="sigma2_init must be"):
             igarch_volatility_scale(np.ones(5), np.ones(5), sigma2_init=-1.0)
+
+    def test_invalid_sigma2_init_nan(self):
+        """sigma2_init=NaN raises ValueError (IEEE 754 NaN bypasses <= 0 check)."""
+        with pytest.raises(ValueError, match="sigma2_init must be"):
+            igarch_volatility_scale(np.ones(5), np.ones(5), sigma2_init=np.nan)
+
+    def test_invalid_sigma2_init_inf(self):
+        """sigma2_init=Inf raises ValueError."""
+        with pytest.raises(ValueError, match="sigma2_init must be"):
+            igarch_volatility_scale(np.ones(5), np.ones(5), sigma2_init=np.inf)
+
+    def test_invalid_auto_init_zero_first_return(self):
+        """sigma2_init=None with first return = 0 raises ValueError (can't auto-init)."""
+        returns = np.array([0.0, 0.01, 0.02, 0.01, -0.01])
+        with pytest.raises(ValueError, match="First return is zero"):
+            igarch_volatility_scale(np.ones(5), returns, sigma2_init=None)

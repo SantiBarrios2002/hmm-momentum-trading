@@ -450,11 +450,16 @@ def igarch_volatility_scale(
         raise ValueError("signals and returns must be non-empty")
 
     if sigma2_init is None:
-        sigma2_init = np.var(returns)
-        # Floor to avoid division by zero if returns are constant
-        sigma2_init = max(sigma2_init, 1e-20)
-    if sigma2_init <= 0:
-        raise ValueError(f"sigma2_init must be > 0, got {sigma2_init}")
+        # Use first return squared as a causal initial variance estimate.
+        # np.var(returns) would use future data (lookahead bias).
+        sigma2_init = returns[0] ** 2
+        if sigma2_init == 0.0:
+            raise ValueError(
+                "First return is zero — cannot auto-initialize sigma2. "
+                "Provide sigma2_init explicitly."
+            )
+    if not np.isfinite(sigma2_init) or sigma2_init <= 0:
+        raise ValueError(f"sigma2_init must be a finite positive float, got {sigma2_init}")
 
     T = len(signals)
     positions = np.empty(T)
