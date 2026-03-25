@@ -7,6 +7,7 @@ from src.langevin.utils import (
     estimate_langevin_params,
     estimate_langevin_params_raw,
     fir_momentum_signal,
+    grid_search_params,
     igarch_volatility_scale,
     trend_to_trading_signal,
 )
@@ -680,3 +681,123 @@ class TestIgarchVolatilityScale:
         returns = np.array([0.0, 0.01, 0.02, 0.01, -0.01])
         with pytest.raises(ValueError, match="First return is zero"):
             igarch_volatility_scale(np.ones(5), returns, sigma2_init=None)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Tests for grid_search_params
+# ──────────────────────────────────────────────────────────────────────
+
+def _make_trend_prices(T: int = 300, seed: int = 0) -> np.ndarray:
+    """Synthetic trending price series for grid search tests."""
+    rng = np.random.default_rng(seed)
+    returns = 0.001 + 0.01 * rng.standard_normal(T)
+    prices = 100.0 * np.cumprod(1.0 + returns)
+    return prices
+
+
+class TestGridSearchParams:
+    """Tests for grid_search_params (Paper §IV-C hand-tuning equivalent)."""
+
+    # Tiny grid — 2×2 = 4 points — so tests finish in seconds.
+    SMALL_GRID = {
+        'theta': [-0.1, -1.0],
+        'lambda_J': [0.0, 0.5],
+    }
+
+    def test_returns_expected_keys(self):
+        """Result dict must contain all documented keys."""
+        prices = _make_trend_prices()
+        result = grid_search_params(prices, self.SMALL_GRID, N_particles=50, seed=0)
+        for key in ('best_params', 'best_train_sharpe', 'test_sharpe',
+                    'train_test_gap', 'all_results', 'n_evaluated'):
+            assert key in result, f"missing key '{key}'"
+
+    def test_n_evaluated_equals_grid_size(self):
+        """n_evaluated must equal the Cartesian product of the grid."""
+        prices = _make_trend_prices()
+        result = grid_search_params(prices, self.SMALL_GRID, N_particles=50, seed=0)
+        assert result['n_evaluated'] == 4  # 2 × 2
+
+    def test_all_results_sorted_descending(self):
+        """all_results must be sorted by descending train_sharpe."""
+        prices = _make_trend_prices()
+        result = grid_search_params(prices, self.SMALL_GRID, N_particles=50, seed=0)
+        sharpes = [r['train_sharpe'] for r in result['all_results']
+                   if np.isfinite(r['train_sharpe'])]
+        assert sharpes == sorted(sharpes, reverse=True)
+
+    def test_best_train_sharpe_is_maximum(self):
+        """best_train_sharpe must equal the maximum train_sharpe in all_results."""
+        prices = _make_trend_prices()
+        result = grid_search_params(prices, self.SMALL_GRID, N_particles=50, seed=0)
+        max_sharpe = max(
+            r['train_sharpe'] for r in result['all_results']
+            if np.isfinite(r['train_sharpe'])
+        )
+        np.testing.assert_almost_equal(result['best_train_sharpe'], max_sharpe, decimal=10)
+
+    def test_best_params_contains_grid_keys(self):
+        """best_params must contain all keys that were in the grid."""
+        prices = _make_trend_prices()
+        result = grid_search_params(prices, self.SMALL_GRID, N_particles=50, seed=0)
+        for key in self.SMALL_GRID:
+            assert key in result['best_params'], f"grid key '{key}' missing from best_params"
+
+    def test_best_params_values_in_grid(self):
+        """best_params values for grid keys must be one of the candidate values."""
+        prices = _make_trend_prices()
+        result = grid_search_params(prices, self.SMALL_GRID, N_particles=50, seed=0)
+        for key, candidates in self.SMALL_GRID.items():
+            assert result['best_params'][key] in candidates
+
+    def test_train_test_gap_is_difference(self):
+        """train_test_gap must equal best_train_sharpe - test_sharpe."""
+        prices = _make_trend_prices()
+        result = grid_search_params(prices, self.SMALL_GRID, N_particles=50, seed=0)
+        if np.isfinite(result['test_sharpe']):
+            expected_gap = result['best_train_sharpe'] - result['test_sharpe']
+            np.testing.assert_almost_equal(result['train_test_gap'], expected_gap, decimal=10)
+
+    def test_reproducible_with_same_seed(self):
+        """Same seed must produce identical results."""
+        prices = _make_trend_prices()
+        r1 = grid_search_params(prices, self.SMALL_GRID, N_particles=50, seed=7)
+        r2 = grid_search_params(prices, self.SMALL_GRID, N_particles=50, seed=7)
+        assert r1['best_train_sharpe'] == r2['best_train_sharpe']
+        assert r1['best_params'] == r2['best_params']
+
+    def test_single_grid_point(self):
+        """A grid with one point per parameter must evaluate exactly once."""
+        prices = _make_trend_prices()
+        grid = {'theta': [-0.5], 'lambda_J': [0.0]}
+        result = grid_search_params(prices, grid, N_particles=50, seed=0)
+        assert result['n_evaluated'] == 1
+        assert result['best_params']['theta'] == -0.5
+        assert result['best_params']['lambda_J'] == 0.0
+
+    def test_sigma_delta_in_grid_without_fir(self):
+        """sigma_delta can be grid-searched when use_fir=False."""
+        prices = _make_trend_prices()
+        grid = {'theta': [-0.1, -0.5], 'sigma_delta': [0.001, 0.01]}
+        result = grid_search_params(prices, grid, N_particles=50, use_fir=False, seed=0)
+        assert result['n_evaluated'] == 4
+        assert 'sigma_delta' in result['best_params']
+
+    def test_raises_on_empty_grid(self):
+        """Empty param_grid must raise ValueError."""
+        prices = _make_trend_prices()
+        with pytest.raises(ValueError, match="param_grid"):
+            grid_search_params(prices, {}, N_particles=50)
+
+    def test_raises_on_invalid_train_frac(self):
+        """train_frac outside (0, 1) must raise ValueError."""
+        prices = _make_trend_prices()
+        with pytest.raises(ValueError, match="train_frac"):
+            grid_search_params(prices, self.SMALL_GRID, train_frac=0.0)
+        with pytest.raises(ValueError, match="train_frac"):
+            grid_search_params(prices, self.SMALL_GRID, train_frac=1.0)
+
+    def test_raises_on_too_few_prices(self):
+        """Fewer than 10 prices must raise ValueError."""
+        with pytest.raises(ValueError, match="at least 10"):
+            grid_search_params(np.ones(5), self.SMALL_GRID)
