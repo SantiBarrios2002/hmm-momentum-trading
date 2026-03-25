@@ -510,9 +510,11 @@ def grid_search_params(
     Parameters
     ----------
     prices : np.ndarray, shape (T,)
-        Raw price series (or log-price series).  The RBPF is applied directly
-        to this sequence.  For raw prices use estimate_langevin_params_raw()
-        to initialise sigma/sigma_obs; for log-prices use estimate_langevin_params().
+        Raw price series (e.g. ES futures closing prices).  Must be in raw
+        (not log) space — the RBPF Kalman state is [price, trend] and the
+        prior C0 = diag([P_0^2 * 0.01, trend_var]) is only meaningful in
+        price units.  Use estimate_langevin_params_raw() to derive sigma and
+        sigma_obs from price differences before customising param_grid.
     param_grid : dict
         Keys must be a subset of: 'theta', 'lambda_J', 'sigma_J', 'sigma_delta',
         'sigma', 'sigma_obs_sq'.
@@ -687,6 +689,14 @@ def grid_search_params(
     all_results.sort(key=lambda x: x['train_sharpe'] if np.isfinite(x['train_sharpe']) else -np.inf,
                      reverse=True)
 
+    if not np.isfinite(best_train_sharpe):
+        raise ValueError(
+            "All grid points returned NaN Sharpe on the training set. "
+            "Check that prices are in raw (not log) space, that N_particles "
+            "is sufficient, and that the parameter ranges in param_grid are valid "
+            "(theta < 0, lambda_J >= 0, sigma_J >= 0)."
+        )
+
     # ── Evaluate best params on test set (once, no peeking) ──────────
     best_params_full = dict(base_params)
     for key, val in zip(grid_keys, best_point):
@@ -701,9 +711,7 @@ def grid_search_params(
         'best_params': best_params_full,
         'best_train_sharpe': best_train_sharpe,
         'test_sharpe': test_sharpe,
-        'train_test_gap': best_train_sharpe - (test_sharpe if np.isfinite(test_sharpe) else 0.0),
+        'train_test_gap': (best_train_sharpe - test_sharpe) if np.isfinite(test_sharpe) else np.nan,
         'all_results': all_results,
         'n_evaluated': len(grid_points),
     }
-
-    return positions

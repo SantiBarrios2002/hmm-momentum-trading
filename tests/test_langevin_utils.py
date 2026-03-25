@@ -750,13 +750,26 @@ class TestGridSearchParams:
         for key, candidates in self.SMALL_GRID.items():
             assert result['best_params'][key] in candidates
 
-    def test_train_test_gap_is_difference(self):
-        """train_test_gap must equal best_train_sharpe - test_sharpe."""
+    def test_train_test_gap_is_difference_when_test_finite(self):
+        """train_test_gap must equal best_train_sharpe - test_sharpe when test is finite."""
         prices = _make_trend_prices()
         result = grid_search_params(prices, self.SMALL_GRID, N_particles=50, seed=0)
         if np.isfinite(result['test_sharpe']):
             expected_gap = result['best_train_sharpe'] - result['test_sharpe']
             np.testing.assert_almost_equal(result['train_test_gap'], expected_gap, decimal=10)
+
+    def test_train_test_gap_is_nan_when_test_sharpe_is_nan(self):
+        """train_test_gap must be NaN when test_sharpe is NaN (not silently 0)."""
+        # Use a test split so short it cannot run the RBPF (< 10 prices).
+        # train_frac=0.97 on 300 prices → test has ~9 prices → _evaluate returns NaN.
+        prices = _make_trend_prices(T=300)
+        result = grid_search_params(prices, self.SMALL_GRID, N_particles=50,
+                                    train_frac=0.97, seed=0)
+        if not np.isfinite(result['test_sharpe']):
+            assert np.isnan(result['train_test_gap']), (
+                "train_test_gap should be NaN when test_sharpe is NaN, "
+                f"got {result['train_test_gap']}"
+            )
 
     def test_reproducible_with_same_seed(self):
         """Same seed must produce identical results."""
