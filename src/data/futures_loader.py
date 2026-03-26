@@ -103,8 +103,10 @@ def load_futures_1m(
         )
 
     # If multiple files exist for the same symbol, use the one with the
-    # widest date range (last alphabetically by convention YYYY-MM-DD).
-    path = matches[-1]
+    # earliest start date in the filename — that file contains the most history.
+    # Filename pattern: {sym}_ohlcv-1m_{START}_{END}.parquet
+    # Sorting alphabetically by name puts earlier start dates first.
+    path = matches[0]
 
     df = pd.read_parquet(path)
 
