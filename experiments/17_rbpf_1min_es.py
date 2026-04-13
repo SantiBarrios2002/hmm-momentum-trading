@@ -58,7 +58,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.data.futures_loader import filter_rth, load_futures_1m, resample_bars
-from src.langevin.rbpf import run_rbpf
+from src.langevin.rbpf_numba import run_rbpf_numba as run_rbpf
 from src.langevin.utils import (
     fir_momentum_signal,
     igarch_volatility_scale,
@@ -72,9 +72,8 @@ SYMBOL = "ES"
 START  = "2019-01-01"
 END    = "2024-12-31"
 
-# Resampling frequency.  Change to "1min" for full-resolution run (~99 min).
-# "5min" keeps runtime ~10 min and is still intraday.
-FREQ = "5min"
+# Resampling frequency.  "1min" is now feasible with the Numba backend (~3 min).
+FREQ = "1min"
 
 # dt in trading-day units: (minutes per bar) / (minutes per RTH day)
 # RTH = 6.5 h = 390 min.  5-min bars → dt = 5/390.
