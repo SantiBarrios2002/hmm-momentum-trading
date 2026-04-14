@@ -87,10 +87,22 @@ def variance_ratio(returns: np.ndarray, q: int) -> float:
     return var_q / (q * var_1)
 
 
-def aggregate_returns(returns_1m: np.ndarray, factor: int) -> np.ndarray:
-    """Aggregate 1-min returns to lower frequency by summing blocks."""
-    n = len(returns_1m) // factor * factor
-    return returns_1m[:n].reshape(-1, factor).sum(axis=1)
+def aggregate_returns_by_day(
+    returns_1m: np.ndarray, dates: np.ndarray, factor: int
+) -> np.ndarray:
+    """Aggregate 1-min returns to lower frequency by summing blocks within each day.
+
+    Avoids cross-day contamination: stubs at the end of each day are discarded.
+    """
+    unique_days = np.unique(dates)
+    agg = []
+    for day in unique_days:
+        mask = dates == day
+        day_rets = returns_1m[mask]
+        n_complete = len(day_rets) // factor * factor
+        if n_complete > 0:
+            agg.append(day_rets[:n_complete].reshape(-1, factor).sum(axis=1))
+    return np.concatenate(agg) if agg else np.array([])
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -113,13 +125,16 @@ def main():
     T_1m = len(returns_1m)
     print(f"  {T_1m:,} 1-min returns loaded")
 
-    # Aggregate to multiple frequencies
+    # Align dates with returns (returns[i] corresponds to timestamps[i+1])
+    ret_dates = np.array([t.date() for t in timestamps[1:]])
+
+    # Aggregate to multiple frequencies (day-aware, no cross-day contamination)
     freqs = {
         "1-min": returns_1m,
-        "5-min": aggregate_returns(returns_1m, 5),
-        "15-min": aggregate_returns(returns_1m, 15),
-        "30-min": aggregate_returns(returns_1m, 30),
-        "60-min": aggregate_returns(returns_1m, 60),
+        "5-min": aggregate_returns_by_day(returns_1m, ret_dates, 5),
+        "15-min": aggregate_returns_by_day(returns_1m, ret_dates, 15),
+        "30-min": aggregate_returns_by_day(returns_1m, ret_dates, 30),
+        "60-min": aggregate_returns_by_day(returns_1m, ret_dates, 60),
     }
 
     # Daily returns: sum within each day

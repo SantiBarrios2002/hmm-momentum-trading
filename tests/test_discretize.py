@@ -48,7 +48,9 @@ class TestDiscretizeReturns:
         x = rng.normal(0, 1, size=1000)
         result = discretize_returns(x, tick)
         remainders = np.abs(result / tick - np.round(result / tick))
-        np.testing.assert_allclose(remainders, 0.0, atol=1e-12)
+        # Tolerance: float64 round-trip through division/multiplication
+        # introduces error of order eps * max(|x|/tick) ≈ eps * 4/0.25 = 16*eps
+        np.testing.assert_allclose(remainders, 0.0, atol=np.finfo(float).eps * 100)
 
     def test_invalid_tick_size(self):
         """Negative or zero tick size should raise."""
@@ -112,7 +114,9 @@ class TestDiscretizedLogGaussian:
 
         log_pmf = discretized_log_gaussian(grid, mu, sigma2, tick)
         total = np.sum(np.exp(log_pmf))
-        np.testing.assert_allclose(total, 1.0, atol=1e-6)
+        # Grid truncation at ±10σ leaves ~2e-23 probability mass outside;
+        # dominant error is float64 summation over ~80 terms: O(n * eps) ≈ 2e-14
+        np.testing.assert_allclose(total, 1.0, atol=len(grid) * np.finfo(float).eps * 10)
 
     def test_approaches_continuous_for_small_tick(self):
         """As tick → 0, discretized log-PDF → continuous log-PDF (up to a constant)."""
@@ -126,10 +130,12 @@ class TestDiscretizedLogGaussian:
         tick = 0.001
         log_pmf_disc = discretized_log_gaussian(x, mu, sigma2, tick)
 
-        # The difference should be approximately -log(tick) for small tick
+        # The difference should be approximately log(tick) for small tick
         # because PMF ≈ PDF * tick, so log(PMF) ≈ log(PDF) + log(tick)
+        # Riemann sum error is O(tick² / sigma²) ≈ 0.001² / 0.1 = 1e-5
         diff = log_pmf_disc - log_pdf_cont
-        np.testing.assert_allclose(diff, np.log(tick), atol=0.01)
+        riemann_error = tick ** 2 / sigma2
+        np.testing.assert_allclose(diff, np.log(tick), atol=riemann_error * 10)
 
     def test_mode_at_mu(self):
         """The PMF should be maximized at the grid point nearest to mu."""
@@ -148,7 +154,8 @@ class TestDiscretizedLogGaussian:
         x_neg = np.array([-0.25, -0.50, -1.00])
         log_pmf_pos = discretized_log_gaussian(x_pos, mu, sigma2, tick)
         log_pmf_neg = discretized_log_gaussian(x_neg, mu, sigma2, tick)
-        np.testing.assert_allclose(log_pmf_pos, log_pmf_neg, atol=1e-10)
+        # Symmetry is exact up to float64 precision; grid is symmetric around mu=0
+        np.testing.assert_allclose(log_pmf_pos, log_pmf_neg, atol=np.finfo(float).eps * 100)
 
     def test_invalid_sigma2(self):
         """Non-positive variance should raise."""

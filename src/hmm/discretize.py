@@ -17,6 +17,7 @@ For ES (E-mini S&P 500), α = 0.25 index points.
 from __future__ import annotations
 
 import numpy as np
+from scipy.special import logsumexp
 
 
 def discretize_returns(returns: np.ndarray, tick_size: float) -> np.ndarray:
@@ -101,14 +102,13 @@ def discretized_log_gaussian(
     grid_lo = np.floor((mu - half_range) / tick_size) * tick_size
     grid_hi = np.ceil((mu + half_range) / tick_size) * tick_size
     n_points = int(round((grid_hi - grid_lo) / tick_size)) + 1
-    grid = np.linspace(grid_lo, grid_hi, n_points)
+    grid = grid_lo + np.arange(n_points) * tick_size
 
     # Continuous log-PDF at grid points: log N(g; mu, sigma2)
     log_pdf_grid = -0.5 * np.log(2.0 * np.pi * sigma2) - 0.5 * (grid - mu) ** 2 / sigma2
 
     # Log normalization constant: log Z_k = logsumexp(log_pdf_grid)
-    max_val = np.max(log_pdf_grid)
-    log_Z = max_val + np.log(np.sum(np.exp(log_pdf_grid - max_val)))
+    log_Z = logsumexp(log_pdf_grid)
 
     # Log-PMF for each observation
     log_pdf_x = -0.5 * np.log(2.0 * np.pi * sigma2) - 0.5 * (x - mu) ** 2 / sigma2
