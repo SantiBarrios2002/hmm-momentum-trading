@@ -29,7 +29,7 @@ pip install -r requirements.txt
 ## Running Tests
 
 ```bash
-pytest -v   # 247 tests across all layers
+pytest -v   # 337 tests across all layers
 ```
 
 ## Project Structure
@@ -38,22 +38,25 @@ pytest -v   # 247 tests across all layers
 src/
   data/
     loader.py              # yfinance wrapper + extract_close_series helper
+    futures_loader.py      # Databento CME futures loader (1-min, RTH filter)
     features.py            # log-returns, EWMA volatility, normalization
   hmm/
-    forward.py             # forward algorithm (Paper S3.2, Alg 1 lines 6-9)
-    backward.py            # backward algorithm (Paper S3.2, Alg 1 lines 11-14)
+    forward.py             # forward algorithm (Paper §3.2, Alg 1 lines 6-9)
+    backward.py            # backward algorithm (Paper §3.2, Alg 1 lines 11-14)
     forward_backward.py    # E-step: gamma and xi posteriors
-    baum_welch.py          # EM training with random restarts (Paper S3.2, Alg 1)
+    baum_welch.py          # EM training with random restarts (Paper §3.2, Alg 1)
+    baum_welch_numba.py    # Numba-accelerated Baum-Welch + inference (~50-100x)
     viterbi.py             # MAP state sequence decoding
     model_selection.py     # AIC / BIC for choosing K
-    inference.py           # online predict-update loop (Paper S6, Alg 4)
+    inference.py           # online predict-update loop (Paper §6, Alg 4)
     utils.py               # shared helpers: sort_states, train_best_model
   langevin/
     model.py               # Langevin jump-diffusion SDE (2012 Paper §II)
     kalman.py              # Kalman filter predict/update (2012 Paper §III-A)
     particle.py            # standard bootstrap particle filter (2012 Paper §III-B)
     rbpf.py                # Rao-Blackwellized particle filter (2012 Paper §III-C)
-    utils.py               # parameter estimation, trading signal transfer function
+    rbpf_numba.py          # Numba-accelerated RBPF (~120x speedup)
+    utils.py               # FIR momentum, IGARCH scaling, parameter estimation
   strategy/
     signals.py             # convert predictions to trading signals
     backtest.py            # simulate P&L with transaction costs
@@ -62,6 +65,7 @@ src/
     plotting.py            # regime-colored charts, cumulative returns
 
 experiments/
+  # HMM track (daily yfinance data)
   01_data_exploration.py   # load data, plot returns, basic stats
   02_model_selection.py    # AIC/BIC vs K (reproduce paper Figure 2)
   03_baum_welch_training.py # train HMM, show convergence
@@ -69,17 +73,24 @@ experiments/
   05_backtest_comparison.py # HMM strategy vs buy-and-hold
   06_em_vs_mcmc.py         # Extension A: EM vs MCMC comparison
   07_multi_asset.py        # Extension B: multi-asset analysis
-  08_k3_vs_k4.py           # Tier 1: quantitative answer to K=3 vs K=4
-  09_rolling_backtest.py   # Tier 1: expanding-window robustness backtest
-  10_signal_refinement.py  # Tier 3: no-trade zone + EMA smoothing grid search
-  11_robustness_test.py    # Tier 3: robustness across tickers and periods
+  08_k3_vs_k4.py           # K=3 vs K=4 model comparison
+  09_rolling_backtest.py   # expanding-window robustness backtest
+  10_signal_refinement.py  # no-trade zone + EMA smoothing grid search
+  11_robustness_test.py    # robustness across tickers and periods
+  # Langevin / RBPF track (synthetic + daily yfinance)
   12_kalman_filter_intro.py # Kalman filter on synthetic Langevin data
   13_langevin_model.py     # RBPF jump detection on synthetic data (Paper Fig 3)
   14_particle_filter_baseline.py # Standard PF baseline on SPY
   15_rbpf_trading.py       # RBPF trading: jumps ON vs OFF
-  16_hmm_vs_rbpf.py        # Head-to-head: HMM vs RBPF vs PF vs B&H
+  # Intraday track (1-min Databento CME futures)
+  16_hmm_vs_rbpf.py        # Fair head-to-head: HMM vs RBPF on 1-min ES
+  17_rbpf_1min_es.py       # RBPF on 1-min ES with Table I params
+  18_rbpf_param_search.py  # 378-point parameter grid search
+  19_rbpf_portfolio.py     # 26-contract uniform-param portfolio
+  20_rbpf_per_contract.py  # per-contract calibration + selective portfolio
 
-tests/                     # pytest suite (247 tests)
+tests/                     # pytest suite (337 tests)
+data/databento/            # 1-min CME futures parquet files (gitignored)
 docs/                      # paper PDFs, architecture docs, math mappings
 figures/                   # output directory for experiment plots
 reports/                   # output directory for experiment text reports
@@ -107,12 +118,15 @@ reports/                   # output directory for experiment text reports
 | Standard PF | `src/langevin/particle.py` | 2012 Paper §III-B, Eq 38-43 |
 | RBPF | `src/langevin/rbpf.py` | 2012 Paper §III-C, Eq 44-48 |
 | Trading Signal | `src/langevin/utils.py` | 2012 Paper §IV-D, Eq 46 |
+| Numba Baum-Welch | `src/hmm/baum_welch_numba.py` | Same as above, JIT-compiled |
+| Numba RBPF | `src/langevin/rbpf_numba.py` | Same as above, JIT-compiled |
 
 ## Running Experiments
 
 Each experiment is standalone and saves figures to `figures/` and text reports to `reports/`:
 
 ```bash
+# HMM track (daily data, ~minutes each)
 python experiments/01_data_exploration.py
 python experiments/02_model_selection.py
 python experiments/03_baum_welch_training.py
@@ -125,12 +139,18 @@ python experiments/09_rolling_backtest.py
 python experiments/10_signal_refinement.py
 python experiments/11_robustness_test.py
 
-# Langevin / RBPF experiments
+# Langevin / RBPF (synthetic + daily data)
 python experiments/12_kalman_filter_intro.py
 python experiments/13_langevin_model.py
 python experiments/14_particle_filter_baseline.py
 python experiments/15_rbpf_trading.py
-python experiments/16_hmm_vs_rbpf.py
+
+# Intraday track (requires Databento parquet files in data/databento/)
+PYTHONUNBUFFERED=1 python experiments/16_hmm_vs_rbpf.py    # ~3 min
+PYTHONUNBUFFERED=1 python experiments/17_rbpf_1min_es.py    # ~3 min
+PYTHONUNBUFFERED=1 python experiments/18_rbpf_param_search.py  # ~10 min
+PYTHONUNBUFFERED=1 python experiments/19_rbpf_portfolio.py     # ~15 min
+PYTHONUNBUFFERED=1 python experiments/20_rbpf_per_contract.py  # ~37 min
 ```
 
 ## Results (SPY, 2015-2024)
@@ -359,27 +379,71 @@ Jump modeling improves log-likelihood by +62 nats (1772 vs 1710) but has negligi
 
 ![RBPF jumps ON vs OFF](figures/15_jumps_on_vs_off.png)
 
-### 16. HMM vs RBPF head-to-head (THE MAIN RESULT)
+### 16. HMM vs RBPF — fair 1-min comparison (THE MAIN RESULT)
 
-The definitive comparison: HMM (2020 paper) vs RBPF (2012 paper) vs standard PF vs buy-and-hold, all on the same SPY data with identical train/test split and transaction costs.
+The definitive comparison: both models on **identical 1-min ES futures data** from Databento (2019-2024, 70/30 split, 2 bps TC). The HMM uses Numba-accelerated Baum-Welch; the RBPF uses Table I parameters with FIR+IGARCH.
 
 | Strategy | Sharpe | Ann. Return | Max Drawdown | Turnover |
 |----------|--------|-------------|--------------|----------|
-| **HMM (weighted vote)** | **0.54** | **7.77%** | **20.33%** | **0.043** |
-| Buy-and-Hold | 0.40 | 5.57% | 27.06% | 0.000 |
-| Standard PF | -1.66 | -25.78% | 61.47% | 1.284 |
-| RBPF | -1.77 | -27.18% | 61.85% | 1.366 |
+| RBPF (FIR+IGARCH) | -0.20 | -0.1% | 43.4% | 0.017 |
+| Buy-and-Hold | +0.10 | +0.1% | 11.0% | 0.000 |
+| HMM (weighted vote) | -1.22 | -0.7% | 99.0% | 0.134 |
 
-**Verdict: HMM decisively outperforms RBPF on out-of-sample SPY trading.**
+At 1-min frequency, **neither model beats buy-and-hold**, but the RBPF degrades more gracefully (-0.20 vs -1.22). The HMM captures microstructure noise rather than real regimes at this frequency — its "bullish" state has 95.7% annualized vol.
 
-Key insights:
-- **RBPF achieves higher log-likelihood** (1772 vs PF's -4206), confirming the Rao-Blackwell benefit for state estimation
-- **Better state estimation ≠ better trading signals** — the continuous Langevin model produces noisy trend estimates that cause excessive turnover (31.5x higher than HMM)
-- **Signal correlation between HMM and RBPF ≈ 0** — the two approaches extract fundamentally different information from the same data
-- The discrete regime-switching model (HMM) produces cleaner, more actionable trading signals than the continuous Langevin model (RBPF)
+**Each model works in its native domain:**
+- HMM on daily SPY: Sharpe **+0.54** (beats B&H)
+- RBPF on 1-min ES: Sharpe **-0.20** (less bad than HMM's -1.22)
 
 ![HMM vs RBPF cumulative](figures/16_hmm_vs_rbpf_cumulative.png)
 ![HMM vs RBPF signals](figures/16_signal_correlation.png)
+
+---
+
+## Intraday RBPF Experiments (1-min Databento CME Futures, 2019-2024)
+
+### 17. RBPF on 1-min ES with Table I parameters
+
+Applies the 2012 paper's exact parameters (Table I) to ES E-mini S&P 500 at 1-min frequency using the Numba RBPF backend.
+
+| Strategy | Sharpe | Turnover |
+|----------|--------|----------|
+| RBPF jumps ON | -0.20 | 0.017 |
+| RBPF jumps OFF | -0.18 | 0.017 |
+| Buy-and-Hold | +0.10 | 0.000 |
+
+Jump modeling improves log-likelihood but not trading performance.
+
+### 18. Parameter grid search (378 combinations)
+
+Searches SF_SIGMA_OBS (9) x SF_SIGMA (7) x THETA (6) on ES training data. **Key finding:** sf_obs=35% dominates all top-20 configs — the Kalman filter works best when it ignores observations (K ~ 0). Best test Sharpe = -0.193.
+
+### 19. Multi-contract portfolio (26 contracts, uniform parameters)
+
+Same parameters across 26 diverse CME contracts (equity indices, FX, rates, energy, agriculture, meats). **Portfolio Sharpe = -3.38.** Uniform parameters across asset classes catastrophically fail.
+
+### 20. Per-contract calibration (280 combos/contract)
+
+Independent calibration of n_taps, sf_obs, theta, alpha per contract. 14/26 contracts survive with positive training Sharpe, but only **3/14 survive out-of-sample** (ZC +0.036, ZW +0.014, ZL +0.011). **Portfolio Sharpe = -2.12.**
+
+The positive training Sharpes were overfit. The 2012 paper's Sharpe 1.82 relied on: (a) 2006-2011 trending markets, (b) 75-contract diversification, (c) hand-tuned parameters — none of which hold for 2019-2024.
+
+---
+
+## Summary of All Results
+
+| Experiment | Data | Frequency | Sharpe | Benchmark |
+|---|---|---|---|---|
+| HMM weighted vote (exp 5) | SPY (yfinance) | Daily | **+0.54** | B&H +0.40 |
+| HMM refined (exp 10) | SPY | Daily | **+0.71** | B&H +0.40 |
+| HMM rolling (exp 9) | SPY | Daily | **+0.71** | B&H +0.57 |
+| HMM 1-min (exp 16) | ES (Databento) | 1-min | -1.22 | B&H +0.10 |
+| RBPF daily (exp 15) | SPY (yfinance) | Daily | -1.77 | B&H +0.40 |
+| RBPF 1-min Table I (exp 17) | ES (Databento) | 1-min | -0.20 | B&H +0.10 |
+| RBPF 1-min grid (exp 18) | ES (Databento) | 1-min | -0.19 | B&H +0.10 |
+| RBPF portfolio uniform (exp 19) | 26 futures | 1-min | -3.38 | — |
+| RBPF portfolio calibrated (exp 20) | 14 futures | 1-min | -2.12 | — |
+| **Paper original (2012)** | **75 futures** | **Intraday** | **+1.82** | — |
 
 ## References
 

@@ -176,9 +176,11 @@ This prevents tests that pass by coincidence and break when parameters change.
 ```
 Python 3.10+
 numpy          — all core math
+numba          — JIT compilation for performance-critical loops (RBPF, Baum-Welch)
 scipy          — logsumexp only; optionally scipy.optimize for extensions
 matplotlib     — all plotting
-yfinance       — data download
+yfinance       — daily data download (SPY, QQQ, etc.)
+databento      — 1-min CME futures data (parquet files in data/databento/)
 hmmlearn       — validation/comparison ONLY (never used as the main implementation)
 pytest         — testing
 ```
@@ -189,7 +191,7 @@ Do NOT install or use: sklearn (not needed), tensorflow, pytorch, pandas (only i
 
 - Source code: `src/`
 - Experiments: `experiments/`
-- Tests: `tests/` (247 tests)
+- Tests: `tests/` (337 tests)
 - Figures output: `figures/` (gitignored PNGs)
 - Reports output: `reports/` (gitignored TXT reports from experiments)
 - Notebooks: `notebooks/`
@@ -199,8 +201,15 @@ Do NOT install or use: sklearn (not needed), tensorflow, pytorch, pandas (only i
 These helpers are used across multiple experiment scripts:
 
 - `src/data/loader.extract_close_series(prices)` — extracts 1-D close Series from yfinance DataFrame
+- `src/data/futures_loader.load_futures_1m(sym)` — loads 1-min CME futures from Databento parquet
+- `src/data/futures_loader.filter_rth(df)` — filters to Regular Trading Hours only
 - `src/hmm/utils.sort_states(params)` — reorders states by ascending emission mean, clips/renormalizes
 - `src/hmm/utils.train_best_model(obs, K, ...)` — runs multiple single-restart EM fits, keeps best LL
+- `src/hmm/baum_welch_numba.train_hmm_numba(obs, K, ...)` — Numba-accelerated Baum-Welch (~50-100x)
+- `src/hmm/baum_welch_numba.run_inference_numba(obs, ...)` — Numba-accelerated online inference
+- `src/langevin/rbpf_numba.run_rbpf_numba(...)` — Numba-accelerated RBPF (~120x speedup)
+- `src/langevin/utils.fir_momentum_signal(trend, n_taps)` — FIR smoothing (Paper §IV-D)
+- `src/langevin/utils.igarch_volatility_scale(sig, returns, alpha)` — IGARCH scaling (Paper §IV-D)
 
 ## Implementation Order
 
@@ -254,26 +263,47 @@ Phase 10 — RBPF Experiments ✅ COMPLETE (Issues #46-#50, PR #57-#62)
   28. experiments/14_particle_filter_baseline.py
   29. experiments/15_rbpf_trading.py
   30. experiments/16_hmm_vs_rbpf.py
+
+Phase 11 — Intraday Experiments ✅ COMPLETE (Issues #63-#69, PR #70-#74)
+  31. src/data/futures_loader.py      (Databento CME loader)
+  32. src/langevin/rbpf_numba.py      (Numba RBPF, ~120x speedup)
+  33. src/hmm/baum_welch_numba.py     (Numba Baum-Welch, ~50-100x speedup)
+  34. experiments/17_rbpf_1min_es.py   (RBPF on 1-min ES, Table I params)
+  35. experiments/18_rbpf_param_search.py (378-pt grid search)
+  36. experiments/19_rbpf_portfolio.py  (26-contract portfolio)
+  37. experiments/20_rbpf_per_contract.py (per-contract calibration)
+  38. experiments/16_hmm_vs_rbpf.py     (rewritten: fair 1-min comparison)
 ```
 
-## Key Results (SPY 2015-2024)
+## Key Results
 
-### HMM (2020 paper)
+### HMM (2020 paper) — daily yfinance data
 - Model selection: AIC and BIC both favor K=4; K=3 used for interpretability
 - 3 regimes: bearish (3.6% of time, ann. vol 56%), neutral (40%), bullish (56%, ann. vol 8.5%)
-- Out-of-sample (2022-2024): weighted vote Sharpe 0.54 vs buy-and-hold 0.40, max drawdown 20% vs 27%
+- Out-of-sample SPY (2022-2024): weighted vote Sharpe **+0.54** vs buy-and-hold +0.40
+- Refined (EMA + no-trade): Sharpe **+0.71**, max DD 7.8%
+- HMM on 1-min ES: Sharpe **-1.22** (captures microstructure noise, not regimes)
 
-### Langevin / RBPF (2012 paper)
+### Langevin / RBPF (2012 paper) — synthetic + daily + 1-min
 - Kalman filter validated on synthetic data: 96.4% trend within 2σ, residuals ~N(0,1)
-- RBPF jump detection on synthetic data: 75% detection rate, 6.2% FP rate, 7% lower RMSE than standard PF
-- RBPF achieves higher log-likelihood than standard PF (1772 vs -4206), confirming Rao-Blackwell benefit
-- Both PF and RBPF produce poor trading signals: Sharpe -1.44 (PF), -1.77 (RBPF) due to excessive turnover (~1.3-1.4)
-- Jump modeling improves LL by +62 nats but has negligible trading impact (+0.3% Sharpe)
+- RBPF jump detection on synthetic data: 75% detection rate, 6.2% FP rate
+- RBPF on daily SPY: Sharpe -1.77 (excessive turnover ~1.37)
+- RBPF on 1-min ES (Table I): Sharpe **-0.20** (FIR+IGARCH smoothing helps)
+- 378-pt parameter grid search: best Sharpe -0.19 (sf_obs=35% always wins — filter ignores data)
+- 26-contract uniform portfolio: Sharpe -3.38 (same params fail across assets)
+- Per-contract calibrated portfolio (14 survivors): Sharpe -2.12 (overfit)
+- Paper original (75 contracts, 2006-2011): Sharpe +1.82 (not reproduced)
 
-### Main Result (Experiment 16)
-- **HMM (Sharpe 0.54) decisively beats RBPF (-1.77) on out-of-sample SPY trading**
-- RBPF turnover is 31.5x HMM turnover — better state estimation does not mean better trading signals
-- Signal correlation HMM vs RBPF ≈ 0 — fundamentally different approaches
+### Main Result (Experiment 16 — fair 1-min comparison)
+- On identical 1-min ES data: **RBPF (-0.20) beats HMM (-1.22)**, neither beats B&H (+0.10)
+- Each model works in its native domain: HMM on daily (+0.54), RBPF on intraday (-0.20)
+- The 2012 paper's result does not generalise to 2019-2024 — market microstructure has changed
+- Better state estimation (higher LL) does not mean better trading signals
+
+### Why the 2012 paper's Sharpe 1.82 was not reproduced
+1. **Market regime**: 2006-2011 had persistent intraday trends (incl. 2008 crisis); 2019-2024 is HFT-dominated and mean-reverting
+2. **Diversification**: 75 contracts vs our 26, lower cross-correlation in their period
+3. **Parameters**: hand-tuned per asset class with domain expertise, not grid-searched
 
 ## What "Done" Looks Like For Each Function
 
