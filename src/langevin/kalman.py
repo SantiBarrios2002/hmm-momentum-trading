@@ -1,4 +1,7 @@
-"""Kalman filter for linear Gaussian state-space models (2012 Paper §III-A)."""
+"""Kalman filter for linear Gaussian state-space models (2012 Paper §III-A).
+
+NOTE: Supplementary module — see experiments/supplementary/ for usage.
+"""
 
 import numpy as np
 from numpy.typing import NDArray

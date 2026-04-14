@@ -1,4 +1,7 @@
-"""Rao-Blackwellized Particle Filter for the Langevin jump-diffusion model (2012 Paper §III-B)."""
+"""Rao-Blackwellized Particle Filter for the Langevin jump-diffusion model (2012 Paper §III-B).
+
+NOTE: Supplementary module — see experiments/supplementary/ for usage.
+"""
 
 import numpy as np
 from numpy.typing import NDArray
