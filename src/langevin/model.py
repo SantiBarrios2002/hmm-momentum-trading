@@ -1,4 +1,7 @@
-"""Langevin state-space model discretization (2012 Paper §II-A)."""
+"""Langevin state-space model discretization (2012 Paper §II-A).
+
+NOTE: Supplementary module — see experiments/supplementary/ for usage.
+"""
 
 import numpy as np
 from numpy.typing import NDArray

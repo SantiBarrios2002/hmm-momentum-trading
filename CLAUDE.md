@@ -4,7 +4,7 @@
 
 This is a **university master's project** for the course "Advanced Signal Processing: Tools and Applications" (ASPTA) at UPC Barcelona. The student must present this code orally to professors and defend every implementation choice. Technical debt, black-box code, or unexplainable behavior will be visible during the presentation and hurt the grade.
 
-The project reproduces results from: Christensen, Turner & Godsill (2020), "Hidden Markov Models Applied To Intraday Momentum Trading With Side Information" (arXiv:2006.08307, Cambridge Signal Processing Lab).
+The project fully reproduces: Christensen, Turner & Godsill (2020), "Hidden Markov Models Applied To Intraday Momentum Trading With Side Information" (arXiv:2006.08307, Cambridge Signal Processing Lab). All five model variants (Default HMM, Baum-Welch HMM, MCMC HMM, Vol Ratio IOHMM, Seasonality IOHMM) are implemented on 1-min ES futures data, then compared against modern ML approaches (LSTM, XGBoost).
 
 ## Cardinal Rules
 
@@ -32,13 +32,13 @@ Example:
 def forward(observations, A, pi, mu, sigma2):
     """
     Forward algorithm (Paper §3.2, Algorithm 1 lines 6-9).
-    
+
     Computes log α_t(k) for all t and k, where:
         α_1(k) = π_k · N(Δy_1; μ_k, σ²_k)
         α_t(k) = [Σ_i α_{t-1}(i) · A_{ik}] · N(Δy_t; μ_k, σ²_k)
-    
+
     Uses log-space computation for numerical stability.
-    
+
     Parameters:
         observations: np.ndarray, shape (T,)
             Log-returns Δy_1, ..., Δy_T
@@ -50,7 +50,7 @@ def forward(observations, A, pi, mu, sigma2):
             Emission means. mu[k] = mean return in state k
         sigma2: np.ndarray, shape (K,)
             Emission variances. sigma2[k] = variance of returns in state k
-    
+
     Returns:
         log_alpha: np.ndarray, shape (T, K)
             Log forward variables. log_alpha[t, k] = log α_t(k)
@@ -77,7 +77,7 @@ log_pdf = -0.5 * np.log(2 * np.pi * sigma2) - 0.5 * (x - mu)**2 / sigma2
 
 Do NOT use `scipy.stats.norm.logpdf`. The student must be able to write the Gaussian PDF on a whiteboard. Using a library call hides this.
 
-Exception: `scipy.special.logsumexp` is acceptable for the log-sum-exp trick (it's a numerical utility, not statistics).
+Exception: `scipy.special.logsumexp` is acceptable for the log-sum-exp trick (it's a numerical utility, not statistics). `scipy.interpolate` is acceptable for B-spline fitting (Paper §4).
 
 ### 5. VALIDATE BEFORE BUILDING ON TOP
 
@@ -127,6 +127,8 @@ test: verify forward against hmmlearn on 3-state synthetic data
 
 Do not vectorize loops for clarity's sake in the first implementation. A clear double for-loop over t and k is better than a clever einsum that the student can't explain. Optimization (if needed) comes after correctness is verified and understood.
 
+Exception: Numba `@njit` backends are acceptable for 1-min scale (400k+ bars) after the pure-Python version is verified.
+
 ### 10. ASK BEFORE ACTING ON AMBIGUITY
 
 If an implementation choice is ambiguous (e.g., "how to initialize the transition matrix?", "tied vs untied variances?"), do NOT make a silent default. State the options, explain the trade-offs, and let me decide. The student must be able to justify every choice during the presentation.
@@ -151,11 +153,9 @@ Every test file must include tests at the boundaries of the parameter space, not
 ### 13. USE NUMERICALLY STABLE FORMULATIONS
 
 When a numerically stable variant of a formula exists, use it from the start — do not write the naive version first:
-- **Kalman covariance update**: use Joseph form `(I-KG) C (I-KG)' + K σ² K'`, not the standard form `(I-KG) C` which breaks PSD
 - **Log-space**: already covered by Rule 6
 - **Symmetry enforcement**: always symmetrize covariance matrices after computation: `C = (C + C.T) / 2`
-
-The RBPF runs many Kalman filters in parallel — a single numerically unstable update can corrupt all downstream particles.
+- **Variance floors**: tie to tick size (α²/2) for discretized models, not arbitrary constants
 
 ### 14. DERIVE TEST TOLERANCES FROM PARAMETERS
 
@@ -176,22 +176,25 @@ This prevents tests that pass by coincidence and break when parameters change.
 ```
 Python 3.10+
 numpy          — all core math
-numba          — JIT compilation for performance-critical loops (RBPF, Baum-Welch)
-scipy          — logsumexp only; optionally scipy.optimize for extensions
+numba          — JIT compilation for performance-critical loops (Baum-Welch at 1-min scale)
+scipy          — logsumexp, B-spline fitting (scipy.interpolate)
 matplotlib     — all plotting
 yfinance       — daily data download (SPY, QQQ, etc.)
 databento      — 1-min CME futures data (parquet files in data/databento/)
 hmmlearn       — validation/comparison ONLY (never used as the main implementation)
 pytest         — testing
+torch          — LSTM/GRU ML baseline (Phase 16 only)
+xgboost        — gradient boosting ML baseline (Phase 16 only)
 ```
 
-Do NOT install or use: sklearn (not needed), tensorflow, pytorch, pandas (only in data loading layer if convenient).
+Do NOT use: sklearn (not needed for core), tensorflow, pandas (only in data loading layer if convenient).
 
 ## File Locations
 
 - Source code: `src/`
 - Experiments: `experiments/`
-- Tests: `tests/` (337 tests)
+- Supplementary (RBPF): `experiments/supplementary/`
+- Tests: `tests/`
 - Figures output: `figures/` (gitignored PNGs)
 - Reports output: `reports/` (gitignored TXT reports from experiments)
 - Notebooks: `notebooks/`
@@ -207,9 +210,6 @@ These helpers are used across multiple experiment scripts:
 - `src/hmm/utils.train_best_model(obs, K, ...)` — runs multiple single-restart EM fits, keeps best LL
 - `src/hmm/baum_welch_numba.train_hmm_numba(obs, K, ...)` — Numba-accelerated Baum-Welch (~50-100x)
 - `src/hmm/baum_welch_numba.run_inference_numba(obs, ...)` — Numba-accelerated online inference
-- `src/langevin/rbpf_numba.run_rbpf_numba(...)` — Numba-accelerated RBPF (~120x speedup)
-- `src/langevin/utils.fir_momentum_signal(trend, n_taps)` — FIR smoothing (Paper §IV-D)
-- `src/langevin/utils.igarch_volatility_scale(sig, returns, alpha)` — IGARCH scaling (Paper §IV-D)
 
 ## Implementation Order
 
@@ -220,7 +220,7 @@ Phase 1 — Data Layer ✅ COMPLETE
   3. src/utils/metrics.py
   4. src/utils/plotting.py
 
-Phase 2 — HMM Core ✅ COMPLETE (82 tests passing)
+Phase 2 — HMM Core ✅ COMPLETE
   5. src/hmm/forward.py        + tests/test_forward.py
   6. src/hmm/backward.py       + tests/test_backward.py
   7. src/hmm/forward_backward.py + tests/test_forward_backward.py
@@ -233,85 +233,48 @@ Phase 3 — Strategy Layer ✅ COMPLETE
   12. src/strategy/signals.py
   13. src/strategy/backtest.py  + tests/test_backtest.py
 
-Phase 4 — Experiments ✅ COMPLETE (all verified with text reports)
-  14. experiments/01_data_exploration.py
-  15. experiments/02_model_selection.py
-  16. experiments/03_baum_welch_training.py
-  17. experiments/04_regime_detection.py
-  18. experiments/05_backtest_comparison.py
+Phase 4 — HMM Experiments (daily) ✅ COMPLETE
+  14. experiments/01-05 (data exploration → backtest)
 
-Phase 5 — Extensions ✅ COMPLETE
-  19. experiments/06_em_vs_mcmc.py
-  20. experiments/07_multi_asset.py
+Phase 5 — Extensions (daily) ✅ COMPLETE
+  15. experiments/06-11 (MCMC, multi-asset, K selection, rolling, refinement)
 
-Phase 6 — Langevin Model ✅ COMPLETE (Issue #41, PR #51)
-  21. src/langevin/model.py     + tests/test_langevin_model.py (19 tests)
+Phase 6-11 — Langevin/RBPF ✅ COMPLETE (supplementary, see experiments/supplementary/)
 
-Phase 7 — Kalman Filter ✅ COMPLETE (Issue #42, PR #52-#53)
-  22. src/langevin/kalman.py    + tests/test_kalman.py (18 tests)
+Phase 12 — Housekeeping & Diagnostics (#83, #84, #85, #89)
+  16. Deprecate RBPF experiments → experiments/supplementary/
+  17. experiments/21_autocorrelation_analysis.py  (frequency microstructure)
+  18. src/hmm/discretize.py     + tests/test_discretize.py (tick-size grid)
 
-Phase 8 — Standard Particle Filter ✅ COMPLETE (Issue #43, PR #54)
-  23. src/langevin/particle.py  + tests/test_particle.py
+Phase 13 — Rolling Retraining (#86)
+  19. src/hmm/rolling.py        + tests/test_rolling.py
+  20. experiments/22_rolling_hmm_1min.py
 
-Phase 9 — RBPF ✅ COMPLETE (Issues #44-#45, PR #55-#56)
-  24. src/langevin/rbpf.py      + tests/test_rbpf.py
-  25. src/langevin/utils.py
+Phase 14 — Paper Model Variants (#87, #88)
+  21. src/hmm/plr.py            + tests/test_plr.py (Default HMM, Paper §3.1)
+  22. src/hmm/mcmc.py           + tests/test_mcmc.py (MCMC HMM, Paper §3.3)
 
-Phase 10 — RBPF Experiments ✅ COMPLETE (Issues #46-#50, PR #57-#62)
-  26. experiments/12_kalman_filter_intro.py
-  27. experiments/13_langevin_model.py
-  28. experiments/14_particle_filter_baseline.py
-  29. experiments/15_rbpf_trading.py
-  30. experiments/16_hmm_vs_rbpf.py
+Phase 15 — Side Information & IOHMM (#75, #76, #77, #78)
+  23. src/hmm/side_info.py      + tests/test_side_info.py (Paper §4)
+  24. src/hmm/iohmm.py          + tests/test_iohmm.py (Paper §5-6)
 
-Phase 11 — Intraday Experiments ✅ COMPLETE (Issues #63-#69, PR #70-#74)
-  31. src/data/futures_loader.py      (Databento CME loader)
-  32. src/langevin/rbpf_numba.py      (Numba RBPF, ~120x speedup)
-  33. src/hmm/baum_welch_numba.py     (Numba Baum-Welch, ~50-100x speedup)
-  34. experiments/17_rbpf_1min_es.py   (RBPF on 1-min ES, Table I params)
-  35. experiments/18_rbpf_param_search.py (378-pt grid search)
-  36. experiments/19_rbpf_portfolio.py  (26-contract portfolio)
-  37. experiments/20_rbpf_per_contract.py (per-contract calibration)
-  38. experiments/16_hmm_vs_rbpf.py     (rewritten: fair 1-min comparison)
+Phase 16 — ML Baselines (#79, #80, #81)
+  25. src/ml/features.py        + tests/test_ml_features.py
+  26. src/ml/lstm.py            + tests/test_lstm.py
+  27. src/ml/boosting.py        + tests/test_boosting.py
+
+Phase 17 — Final Experiments (#90, #82)
+  28. experiments/23_full_paper_reproduction.py  (all 5 paper models, Figure 8)
+  29. experiments/24_ml_vs_hmm_comparison.py     (7-way ML vs HMM vs IOHMM)
 ```
-
-## Key Results
-
-### HMM (2020 paper) — daily yfinance data
-- Model selection: AIC and BIC both favor K=4; K=3 used for interpretability
-- 3 regimes: bearish (3.6% of time, ann. vol 56%), neutral (40%), bullish (56%, ann. vol 8.5%)
-- Out-of-sample SPY (2022-2024): weighted vote Sharpe **+0.54** vs buy-and-hold +0.40
-- Refined (EMA + no-trade): Sharpe **+0.71**, max DD 7.8%
-- HMM on 1-min ES: Sharpe **-1.22** (captures microstructure noise, not regimes)
-
-### Langevin / RBPF (2012 paper) — synthetic + daily + 1-min
-- Kalman filter validated on synthetic data: 96.4% trend within 2σ, residuals ~N(0,1)
-- RBPF jump detection on synthetic data: 75% detection rate, 6.2% FP rate
-- RBPF on daily SPY: Sharpe -1.77 (excessive turnover ~1.37)
-- RBPF on 1-min ES (Table I): Sharpe **-0.20** (FIR+IGARCH smoothing helps)
-- 378-pt parameter grid search: best Sharpe -0.19 (sf_obs=35% always wins — filter ignores data)
-- 26-contract uniform portfolio: Sharpe -3.38 (same params fail across assets)
-- Per-contract calibrated portfolio (14 survivors): Sharpe -2.12 (overfit)
-- Paper original (75 contracts, 2006-2011): Sharpe +1.82 (not reproduced)
-
-### Main Result (Experiment 16 — fair 1-min comparison)
-- On identical 1-min ES data: **RBPF (-0.20) beats HMM (-1.22)**, neither beats B&H (+0.10)
-- Each model works in its native domain: HMM on daily (+0.54), RBPF on intraday (-0.20)
-- The 2012 paper's result does not generalise to 2019-2024 — market microstructure has changed
-- Better state estimation (higher LL) does not mean better trading signals
-
-### Why the 2012 paper's Sharpe 1.82 was not reproduced
-1. **Market regime**: 2006-2011 had persistent intraday trends (incl. 2008 crisis); 2019-2024 is HFT-dominated and mean-reverting
-2. **Diversification**: 75 contracts vs our 26, lower cross-correlation in their period
-3. **Parameters**: hand-tuned per asset class with domain expertise, not grid-searched
 
 ## What "Done" Looks Like For Each Function
 
 A function is done when:
-1. ✅ It has a complete docstring with math and paper reference
-2. ✅ It has a passing test against synthetic data
-3. ✅ It has a passing test against hmmlearn (where applicable)
-4. ✅ The student (me) has read the code and understands every line
-5. ✅ It handles edge cases (empty input, single observation, K=1)
+1. It has a complete docstring with math and paper reference
+2. It has a passing test against synthetic data
+3. It has a passing test against hmmlearn (where applicable)
+4. The student (me) has read the code and understands every line
+5. It handles edge cases (empty input, single observation, K=1)
 
 Do NOT move to the next function until all 5 are satisfied.

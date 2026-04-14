@@ -1,5 +1,7 @@
 """Numba-accelerated Rao-Blackwellized Particle Filter (2012 Paper §III-B).
 
+NOTE: Supplementary module — see experiments/supplementary/ for usage.
+
 This module reimplements run_rbpf from src/langevin/rbpf.py using Numba @njit
 JIT compilation.  The Python loop over T * N iterations is the bottleneck: for
 T=400 000 (1-min RTH bars over 5 years) and N=100 particles, this is 40M Kalman

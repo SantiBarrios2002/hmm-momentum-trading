@@ -1,5 +1,7 @@
 """Utility functions bridging RBPF output to trading strategy (Paper §IV-C, §IV-D).
 
+NOTE: Supplementary module — see experiments/supplementary/ for usage.
+
 2020 Paper: Christensen, Turner & Godsill (2020),
     "Hidden Markov Models Applied To Intraday Momentum Trading",
     arXiv:2006.08307.
