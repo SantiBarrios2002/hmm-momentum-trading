@@ -94,10 +94,12 @@ class TestRollingHmm:
         assert np.all(np.isfinite(result["state_probs"]))
 
     def test_state_probs_sum_to_one(self):
+        K = 3
         daily = self._make_daily_returns(n_days=12, bars_per_day=20)
-        result = rolling_hmm(daily, 3, 5, _dummy_train, _dummy_inference)
+        result = rolling_hmm(daily, K, 5, _dummy_train, _dummy_inference)
         row_sums = result["state_probs"].sum(axis=1)
-        np.testing.assert_allclose(row_sums, 1.0, atol=1e-10)
+        # Dummy returns uniform 1/K; sum = K * (1/K), error ≤ K * eps
+        np.testing.assert_allclose(row_sums, 1.0, atol=K * np.finfo(float).eps)
 
     def test_daily_params_are_dicts(self):
         daily = self._make_daily_returns(n_days=10, bars_per_day=5)
@@ -150,3 +152,48 @@ class TestRollingHmm:
         rolling_hmm(daily, 2, 3, tracking_train, _dummy_inference)
         # Seeds should be unique (one per test day)
         assert len(set(seeds_used)) == len(seeds_used)
+
+    def test_test_day_indices_returned(self):
+        """Result must include test_day_indices for return alignment."""
+        daily = self._make_daily_returns(n_days=10, bars_per_day=5)
+        H = 3
+        result = rolling_hmm(daily, 2, H, _dummy_train, _dummy_inference)
+        assert "test_day_indices" in result
+        assert result["test_day_indices"] == list(range(H, 10))
+
+    def test_skipped_day_excluded_from_all_outputs(self):
+        """When training fails on a day, it must be excluded from params AND predictions."""
+        fail_on_day = 5
+
+        def failing_train(obs, K, **kwargs):
+            if kwargs.get("random_state") == fail_on_day:
+                raise RuntimeError("simulated failure")
+            return _dummy_train(obs, K, **kwargs)
+
+        daily = self._make_daily_returns(n_days=8, bars_per_day=5)
+        H = 3
+        result = rolling_hmm(daily, 2, H, failing_train, _dummy_inference)
+        # Day 5 should be skipped: test days = [3, 4, 6, 7]
+        assert fail_on_day not in result["test_day_indices"]
+        expected_days = [d for d in range(H, 8) if d != fail_on_day]
+        assert result["test_day_indices"] == expected_days
+        assert result["n_test_days"] == len(expected_days)
+        assert len(result["daily_params"]) == len(expected_days)
+        assert len(result["daily_ll"]) == len(expected_days)
+        assert result["predictions"].shape == (len(expected_days) * 5,)
+
+    def test_all_days_fail_raises(self):
+        """If all training days fail, RuntimeError is raised."""
+        def always_fail(obs, K, **kwargs):
+            raise RuntimeError("always fails")
+
+        daily = self._make_daily_returns(n_days=5, bars_per_day=5)
+        with pytest.raises(RuntimeError, match="No days produced predictions"):
+            rolling_hmm(daily, 2, 2, always_fail, _dummy_inference)
+
+
+class TestSplitByDayEdgeCases:
+    def test_empty_input(self):
+        """Empty returns and day_indices should return empty list."""
+        result = split_by_day(np.array([]), np.array([]))
+        assert result == []

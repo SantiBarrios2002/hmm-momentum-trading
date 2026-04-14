@@ -104,12 +104,10 @@ def main():
         signal = predictions_to_signal(preds, "sign")
 
         # Get corresponding returns for the test period
-        # Test period starts at day H, so collect returns from day H onward
-        test_returns = np.concatenate(daily_arrays[H:])
-        # Ensure lengths match (rolling_hmm may skip failed days)
-        min_len = min(len(test_returns), len(signal))
-        test_returns = test_returns[:min_len]
-        signal = signal[:min_len]
+        # Use test_day_indices to align returns with predictions exactly
+        # (skipped days must be excluded from returns too)
+        test_day_idx = result["test_day_indices"]
+        test_returns = np.concatenate([daily_arrays[d] for d in test_day_idx])
 
         bt = backtest(test_returns, signal, transaction_cost_bps=TC_BPS)
         metrics = bt["metrics"]
