@@ -121,9 +121,10 @@ class TestMcmcHmm:
         """MAP estimate should have finite log-posterior."""
         rng = np.random.default_rng(42)
         obs = rng.normal(0, 0.01, size=200)
-        params, samples, _ = mcmc_hmm(obs, 2, n_samples=1000, burn_in=200)
+        burn_in = 200
+        params, samples, _ = mcmc_hmm(obs, 2, n_samples=1000, burn_in=burn_in)
         # MAP should have higher log-posterior than average
-        post_burn = samples["log_posterior"][200:]
+        post_burn = samples["log_posterior"][burn_in:]
         map_post = np.max(post_burn)
         assert np.isfinite(map_post)
 
@@ -198,11 +199,12 @@ class TestBridgeSampling:
         rng = np.random.default_rng(42)
         obs = rng.normal(0, 0.01, size=200)
         K = 2
-        _, samples, _ = mcmc_hmm(obs, K, n_samples=1000, burn_in=200)
+        burn_in = 200
+        _, samples, _ = mcmc_hmm(obs, K, n_samples=1000, burn_in=burn_in)
         A = np.array([[0.9, 0.1], [0.1, 0.9]])
 
         lml = bridge_sampling_log_marginal(
-            samples["mu"][200:], samples["sigma2"][200:],
+            samples["mu"][burn_in:], samples["sigma2"][burn_in:],
             obs, K, A, n_importance=100,
         )
         assert np.isfinite(lml)
@@ -216,20 +218,22 @@ class TestBridgeSampling:
         obs, _ = _generate_hmm_data(2, 1000, true_mu, true_sigma2, true_A, true_pi)
 
         # Fit K=2
+        burn_in_2 = 1000
         params2, samples2, _ = mcmc_hmm(
-            obs, 2, n_samples=3000, burn_in=1000, proposal_scale=0.005
+            obs, 2, n_samples=3000, burn_in=burn_in_2, proposal_scale=0.005
         )
         lml2 = bridge_sampling_log_marginal(
-            samples2["mu"][1000:], samples2["sigma2"][1000:],
+            samples2["mu"][burn_in_2:], samples2["sigma2"][burn_in_2:],
             obs, 2, params2["A"], n_importance=200,
         )
 
         # Fit K=5
+        burn_in_5 = 1000
         params5, samples5, _ = mcmc_hmm(
-            obs, 5, n_samples=3000, burn_in=1000, proposal_scale=0.005
+            obs, 5, n_samples=3000, burn_in=burn_in_5, proposal_scale=0.005
         )
         lml5 = bridge_sampling_log_marginal(
-            samples5["mu"][1000:], samples5["sigma2"][1000:],
+            samples5["mu"][burn_in_5:], samples5["sigma2"][burn_in_5:],
             obs, 5, params5["A"], n_importance=200,
         )
 

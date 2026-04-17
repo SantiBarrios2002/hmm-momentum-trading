@@ -183,7 +183,9 @@ def _chow_test_p_value(
         return 1.0  # Not enough data to test
 
     if rss_split <= 0.0:
-        return 1.0  # Perfect fit — no evidence against H₀
+        if rss_pooled <= 0.0:
+            return 1.0  # Both fits perfect — no discriminating power
+        return 0.0  # Perfect split fit, imperfect pooled fit → definite change point
 
     f_stat = ((rss_pooled - rss_split) / df_num) / (rss_split / df_den)
     if f_stat <= 0.0:
@@ -316,12 +318,21 @@ def plr_to_hmm_params(
     mu = mu[order]
     sigma2 = sigma2[order]
 
-    # Sticky transition matrix (Paper §3.1)
-    A = np.full((K, K), (1.0 - beta) / max(K - 1, 1))
-    np.fill_diagonal(A, beta)
-    # Handle K=1: A = [[1.0]]
+    # Floor zero variances to prevent forward() crash (Rule 11, 13)
+    sigma2 = np.maximum(sigma2, 1e-10)
+
+    # K=1: trivial single-state model
     if K == 1:
-        A[0, 0] = 1.0
+        return {
+            "A": np.array([[1.0]]),
+            "pi": np.array([1.0]),
+            "mu": mu,
+            "sigma2": sigma2,
+        }
+
+    # Sticky transition matrix (Paper §3.1)
+    A = np.full((K, K), (1.0 - beta) / (K - 1))
+    np.fill_diagonal(A, beta)
 
     # Ergodic distribution of symmetric sticky matrix is uniform
     pi = np.full(K, 1.0 / K)

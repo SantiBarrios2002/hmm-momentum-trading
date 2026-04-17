@@ -137,12 +137,16 @@ def mcmc_hmm(
         log_prior_prop = _log_prior(A_prop, mu_prop, sigma2_prop, K)
         log_post_prop = log_lik_prop + log_prior_prop
 
-        # Log-acceptance: includes Jacobian for log-normal σ² proposal
-        # q(σ²'|σ²) is log-normal → Jacobian correction cancels for symmetric log-proposal
-        log_alpha = log_post_prop - log_post_cur
+        # Log-acceptance with Jacobian for log-normal σ² proposal.
+        # Proposal: σ²' = σ² · exp(Z), Z ~ N(0, scale).
+        # q(σ²'|σ²) ≠ q(σ²|σ²') in σ² space → Jacobian = Π(σ²_cur / σ²_prop).
+        # log J = Σ_k [log σ²_cur_k - log σ²_prop_k]
+        log_jacobian = np.sum(np.log(sigma2_cur) - np.log(sigma2_prop))
+        log_alpha = log_post_prop - log_post_cur + log_jacobian
 
-        # Accept/reject
-        if np.isfinite(log_alpha) and np.log(rng.uniform()) < log_alpha:
+        # Accept/reject (avoid log(0) warning by flooring uniform draw)
+        log_u = np.log(max(rng.uniform(), np.finfo(float).tiny))
+        if np.isfinite(log_alpha) and log_u < log_alpha:
             mu_cur = mu_prop
             sigma2_cur = sigma2_prop
             A_cur = A_prop
@@ -308,11 +312,9 @@ def _ergodic_distribution(A: np.ndarray) -> np.ndarray:
     idx = np.argmin(np.abs(eigenvalues - 1.0))
     pi = np.real(eigenvectors[:, idx])
     pi = np.abs(pi)  # Ensure non-negative
-    pi_sum = pi.sum()
-    if pi_sum > 0:
-        pi /= pi_sum
-    else:
-        pi = np.full(K, 1.0 / K)
+    # Clip to avoid zero entries that would crash forward() (requires A, pi > 0)
+    pi = np.maximum(pi, 1e-10)
+    pi /= pi.sum()
     return pi
 
 
