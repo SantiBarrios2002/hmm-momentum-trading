@@ -8,6 +8,7 @@ from src.hmm.iohmm import (
     run_inference_iohmm,
     train_iohmm,
 )
+from src.hmm.side_info import spline_buckets
 
 # ── Shared fixtures ──────────────────────────────────────────────────────────
 
@@ -261,3 +262,101 @@ class TestIntegration:
         preds, sprobs = run_inference_iohmm(obs, side_test, model)
         assert np.all(np.isfinite(preds))
         assert np.all(np.isfinite(sprobs))
+
+    def test_K1_degenerate(self):
+        """K=1: single state → predictions always equal mu[0], state_probs always 1."""
+        rng = np.random.default_rng(88)
+        T = 200
+        obs = rng.normal(0, 0.005, T)
+        side = np.linspace(0.3, 0.7, T)
+
+        model = train_iohmm(obs, side, K=1, n_knots=4, **FAST_BW)
+        preds, sprobs = run_inference_iohmm(obs, side, model)
+
+        # All state probs must be 1.0 (only one state)
+        np.testing.assert_allclose(sprobs, np.ones((T, 1)), atol=1e-10)
+        # All predictions must equal the single emission mean
+        for r in range(model["R"]):
+            mu_r = model["bucket_params"][r]["mu"][0]
+            mask = np.searchsorted(model["boundaries"], side, side="right") == r
+            if np.any(mask):
+                np.testing.assert_allclose(
+                    preds[mask], mu_r,
+                    atol=1e-12,
+                    err_msg=f"bucket {r}: predictions != mu[0]",
+                )
+
+    def test_predict_before_update_causal(self):
+        """predictions[t] must use omega_pred (before update), not omega (after).
+
+        For K=1, predictions[t] = mu[0] regardless of observations — this
+        verifies the predict step uses the predicted distribution, not the
+        posterior.
+        """
+        rng = np.random.default_rng(33)
+        T = 100
+        # Use extreme observations that would shift a posterior if misused
+        obs = rng.normal(10.0, 0.001, T)
+        side = np.linspace(0.3, 0.7, T)
+
+        model = train_iohmm(obs, side, K=1, n_knots=4, **FAST_BW)
+        preds, _ = run_inference_iohmm(obs, side, model)
+
+        # With K=1, predictions must equal the bucket's mu[0] exactly
+        for t in range(T):
+            r_t = int(np.searchsorted(model["boundaries"], side[t], side="right"))
+            r_t = min(r_t, model["R"] - 1)
+            expected = model["bucket_params"][r_t]["mu"][0]
+            assert preds[t] == pytest.approx(expected, abs=1e-12), (
+                f"t={t}: prediction {preds[t]} != mu[0]={expected}"
+            )
+
+    def test_bucket_assignment_consistency(self):
+        """Bucket assignments in inference must match spline_buckets from training."""
+        model = train_iohmm(
+            OBS_SYNTH, SIDE_INFO_SYNTH, K=2, n_knots=4, **FAST_BW,
+        )
+        # Re-derive bucket assignments the same way training does
+        _, train_bucket_idx = spline_buckets(model["spline"], SIDE_INFO_SYNTH)
+
+        # Inference uses np.searchsorted(boundaries, side_info, side="right")
+        infer_bucket_idx = np.searchsorted(
+            model["boundaries"], SIDE_INFO_SYNTH, side="right",
+        )
+        np.testing.assert_array_equal(train_bucket_idx, infer_bucket_idx)
+
+    def test_iohmm_params_validation_missing_keys(self):
+        """run_inference_iohmm should raise on missing keys."""
+        obs = np.array([1.0, 2.0, 3.0])
+        side = np.array([0.3, 0.5, 0.7])
+        with pytest.raises(ValueError, match="missing keys"):
+            run_inference_iohmm(obs, side, {"K": 2})
+
+    def test_iohmm_params_validation_length_mismatch(self):
+        """run_inference_iohmm should raise if bucket_params length != R."""
+        obs = np.array([1.0, 2.0, 3.0])
+        side = np.array([0.3, 0.5, 0.7])
+        bad_params = {
+            "boundaries": np.array([0.5]),
+            "bucket_params": [{"A": np.eye(2), "pi": np.array([0.5, 0.5]),
+                               "mu": np.array([0.0, 0.0]), "sigma2": np.array([1.0, 1.0])}],
+            "K": 2,
+            "R": 2,  # R=2 but only 1 bucket_params entry
+        }
+        with pytest.raises(ValueError, match="bucket_params length"):
+            run_inference_iohmm(obs, side, bad_params)
+
+    def test_fallback_buckets_are_independent_copies(self):
+        """Each fallback bucket should own its own arrays (no shared references)."""
+        model = train_iohmm(
+            OBS_SYNTH, SIDE_INFO_SYNTH, K=2, n_knots=4,
+            min_obs_per_bucket=T_SYNTH + 1,  # force all fallback
+            **FAST_BW,
+        )
+        if model["R"] >= 2:
+            # Mutate bucket 0's mu — bucket 1 should be unaffected
+            original_mu_1 = model["bucket_params"][1]["mu"].copy()
+            model["bucket_params"][0]["mu"][:] = 999.0
+            np.testing.assert_array_equal(
+                model["bucket_params"][1]["mu"], original_mu_1,
+            )

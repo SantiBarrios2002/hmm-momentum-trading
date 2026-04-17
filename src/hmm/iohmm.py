@@ -129,7 +129,9 @@ def train_iohmm(
     # Step 4: Train BW per bucket
     bucket_params = []
     bucket_ll = []
-    global_params = None  # Lazy: only train if a bucket needs the fallback
+    # Lazy global fallback: only trained if a bucket has too few observations.
+    global_params = None
+    global_best_ll = float("nan")
 
     for r in range(R):
         mask = bucket_idx == r
@@ -143,14 +145,16 @@ def train_iohmm(
                     f"(< {min_obs_per_bucket}), using global fallback"
                 )
             if global_params is None:
-                global_params, global_ll = train_hmm_numba(
+                global_params, global_ll_hist = train_hmm_numba(
                     observations, K,
                     n_restarts=n_restarts, max_iter=max_iter, tol=tol,
                     min_variance=min_variance, random_state=random_state,
                     verbose=False,
                 )
-            bucket_params.append(global_params)
-            bucket_ll.append(global_ll[-1] if global_params is not None else float("nan"))
+                global_best_ll = global_ll_hist[0]
+            # Copy so each bucket slot owns its own arrays
+            bucket_params.append({k: v.copy() for k, v in global_params.items()})
+            bucket_ll.append(global_best_ll)
             continue
 
         if verbose:
@@ -164,7 +168,7 @@ def train_iohmm(
             verbose=False,
         )
         bucket_params.append(params_r)
-        bucket_ll.append(ll_r[-1])
+        bucket_ll.append(ll_r[0])
 
     return {
         "spline": spline,
@@ -183,12 +187,16 @@ def run_inference_iohmm(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Online predict-update filter with bucket-switching (Paper §6, Algorithm 5).
 
-    At each time step t:
+    At each time step t ≥ 1:
         1. Look up bucket r_t = bucket(x_t) from the side-info spline roots
         2. Retrieve Θ_{r_t} = (A_{r_t}, π_{r_t}, μ_{r_t}, σ²_{r_t})
         3. Predict:  ω̂_t(k) = Σ_i ω_{t-1}(i) · A_{r_t}[i, k]
         4. Forecast: ŷ_t = Σ_k ω̂_t(k) · μ_{r_t}(k)
         5. Update:   ω_t(k) ∝ ω̂_t(k) · N(Δy_t; μ_{r_t}(k), σ²_{r_t}(k))
+
+    At t = 0 there is no prior posterior, so:
+        predictions[0] = Σ_k π_{r_0}(k) · μ_{r_0}(k)   (prior prediction)
+        ω_0(k) ∝ π_{r_0}(k) · N(Δy_0; μ_{r_0}(k), σ²_{r_0}(k))
 
     Parameters
     ----------
@@ -197,14 +205,16 @@ def run_inference_iohmm(
     side_info : np.ndarray, shape (T,)
         Side information x_1, ..., x_T.
     iohmm_params : dict
-        Output from train_iohmm().
+        Output from train_iohmm().  Required keys:
+        "boundaries", "bucket_params", "K", "R".
 
     Returns
     -------
     predictions : np.ndarray, shape (T,)
-        One-step-ahead predictions ŷ_t = E[Δy_t | Δy_{1:t-1}, x_t].
+        predictions[0] = E[Δy_0 | x_0]  (unconditional prior prediction).
+        predictions[t] = E[Δy_t | Δy_{0:t-1}, x_t]  for t ≥ 1.
     state_probs : np.ndarray, shape (T, K)
-        Filtered state posteriors p(m_t | Δy_{1:t}, x_{1:t}).
+        Filtered state posteriors p(m_t | Δy_{0:t}, x_{0:t}).
     """
     observations = np.asarray(observations, dtype=np.float64)
     side_info = np.asarray(side_info, dtype=np.float64)
@@ -219,10 +229,21 @@ def run_inference_iohmm(
             f"got {len(observations)} and {len(side_info)}"
         )
 
+    # Validate iohmm_params structure
+    required_keys = {"boundaries", "bucket_params", "K", "R"}
+    missing = required_keys - set(iohmm_params)
+    if missing:
+        raise ValueError(f"iohmm_params is missing keys: {missing}")
+
     boundaries = iohmm_params["boundaries"]
     bucket_params = iohmm_params["bucket_params"]
     K = iohmm_params["K"]
     R = iohmm_params["R"]
+
+    if len(bucket_params) != R:
+        raise ValueError(
+            f"bucket_params length {len(bucket_params)} != R={R}"
+        )
 
     # Assign observations to buckets via the trained spline boundaries
     bucket_idx = np.searchsorted(boundaries, side_info, side="right").astype(np.intp)
